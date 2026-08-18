@@ -5,13 +5,9 @@
   "description": "A lightweight, private-hand 2D card table with TTS deck import.",
   "type": "module",
   "scripts": {
-    "start": "node server/index.js",
-    "dev": "node --watch server/index.js",
+    "start": "npx serve docs",
     "test": "node --test",
-    "check": "node --check server/index.js && node --check public/js/app.js && node --test"
-  },
-  "dependencies": {
-    "ws": "^8.18.3"
+    "check": "node --check docs/js/app.js && node --check docs/js/game.js && node --check docs/js/tts.js && node --test"
   },
   "engines": {
     "node": ">=20"

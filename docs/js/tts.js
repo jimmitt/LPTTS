@@ -1,3 +1,4 @@
+// Browser-side TTS parser; imports never leave the host's device.
 export function parseTtsDeck(input) {
   const save = typeof input === 'string' ? JSON.parse(input) : input;
   const cards = [];

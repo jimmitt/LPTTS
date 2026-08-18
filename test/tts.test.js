@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseTtsDeck } from '../server/tts.js';
+import { parseTtsDeck } from '../docs/js/tts.js';
 
 test('imports cards from a TTS deck sheet', () => {
   const cards = parseTtsDeck({ObjectStates:[{Name:'Deck',CustomDeck:{1:{FaceURL:'https://example.com/face.jpg',BackURL:'https://example.com/back.jpg',NumWidth:10,NumHeight:7}},ContainedObjects:[{Name:'Card',CardID:100,Nickname:'Ace'},{Name:'Card',CardID:101,Nickname:'Two'}]}]});

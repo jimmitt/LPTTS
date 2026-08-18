@@ -17,10 +17,8 @@
       <p class="lede">A tiny 2D table for sharing any TTS card deck. Your hand stays yours.</p>
       <form id="join-form">
         <label>Display name<input id="name" maxlength="24" required placeholder="Card shark"></label>
-        <label>Room code <span>leave blank to create</span><input id="room" maxlength="6" placeholder="FABLE"></label>
-        <label id="server-label">WebSocket server <span>optional on hosted demo</span><input id="server-url" inputmode="url" placeholder="wss://your-server.example"></label>
-        <button class="primary" type="submit">Take a seat <b>→</b></button>
-        <button class="demo" type="button" id="demo-button">Try the table offline</button>
+        <button class="primary" type="submit">Host a table <b>→</b></button>
+        <button class="demo" type="button" id="join-button">Join with a connection code</button>
       </form>
       <p id="lobby-status" class="status" role="status"></p>
     </main>
@@ -30,8 +28,8 @@
   <div id="game" class="game" hidden>
     <header>
       <a class="wordmark" href="./"><span class="mini-mark">▰</span> LPTTS</a>
-      <div class="room-pill"><span>ROOM</span><button id="copy-room" title="Copy invite link">------</button></div>
-      <div class="header-actions"><span id="connection" class="connection">Offline</span><button id="help" class="icon-button" title="How to play">?</button></div>
+      <div class="room-pill"><span>TABLE</span><button id="connections" title="Connect another player">HOST</button></div>
+      <div class="header-actions"><span id="connection" class="connection">Not connected</span><button id="help" class="icon-button" title="How to play">?</button></div>
     </header>
 
     <div class="workspace">
@@ -64,7 +62,8 @@
     <div id="toast" class="toast" role="status"></div>
   </div>
 
-  <dialog id="help-dialog"><button class="dialog-close" autofocus>×</button><p class="eyebrow">Quick guide</p><h2>Welcome to the table</h2><ul><li>Import a Tabletop Simulator save or saved-object JSON file.</li><li>Click the draw pile to add a private card to your hand.</li><li>Double-click a hand card to play it face-up in the center.</li><li>Drag table cards to arrange them. Double-click to flip. Right-click to take one.</li><li>Share the room link. Other players see your card backs and count—never your faces.</li></ul></dialog>
+  <dialog id="connect-dialog" class="connect-dialog"><button class="dialog-close" data-close="connect-dialog">×</button><p class="eyebrow">Connect directly</p><h2 id="connect-title">Add a player</h2><div id="connect-host"><p>Send this offer code to the player who wants to join.</p><textarea id="offer-code" readonly></textarea><button class="primary" id="copy-offer">Copy offer code</button><label>Paste their answer code<textarea id="answer-code"></textarea></label><button class="demo" id="accept-answer">Complete connection</button></div><div id="connect-guest" hidden><label>Paste the host’s offer code<textarea id="join-offer"></textarea></label><button class="primary" id="make-answer">Create answer code</button><div id="answer-result" hidden><p>Send this answer code back to the host.</p><textarea id="guest-answer" readonly></textarea><button class="demo" id="copy-answer">Copy answer code</button></div></div><p id="connect-status" class="status"></p></dialog>
+  <dialog id="help-dialog"><button class="dialog-close" data-close="help-dialog" autofocus>×</button><p class="eyebrow">Quick guide</p><h2>Welcome to the table</h2><ul><li>The host clicks the table badge to create an offer code and sends it to a player.</li><li>The player creates an answer code and sends that back. No server or account is involved.</li><li>Import a Tabletop Simulator save or saved-object JSON file.</li><li>Click the draw pile to add a private card to your hand.</li><li>Double-click a hand card to play it face-up in the center.</li><li>Drag table cards to arrange them. Double-click to flip. Right-click to take one.</li></ul></dialog>
   <script type="module" src="./js/app.js"></script>
 </body>
 </html>

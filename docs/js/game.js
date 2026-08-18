@@ -21,6 +21,7 @@ export class GameRoom {
   leave(id) { this.players.delete(id); }
 
   importDeck(cards) {
+    if (cards.length > 1000) throw new Error('Decks are limited to 1,000 cards.');
     this.deck = cards.map((card) => ({ ...card, owner: null }));
   }
 

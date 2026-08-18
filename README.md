@@ -1,25 +1,25 @@
 # LPTTS
 
-LPTTS is a lightweight, browser-based 2D card table. It imports card decks from Tabletop Simulator JSON, keeps each player's hand private on the server, and synchronizes the shared table over WebSockets.
+LPTTS is a lightweight, browser-based 2D card table. It imports card decks from Tabletop Simulator JSON, keeps each player's hand private, and synchronizes the shared table directly between browsers with WebRTC. The host's browser is the authoritative game server—there is no backend.
 
 ## What it does
 
 - Imports TTS save and saved-object JSON containing `Deck`, `Card`, or `CardCustom` objects
 - Displays TTS deck-sheet images using `CardID`, `CustomDeck`, `NumWidth`, and `NumHeight`
-- Supports rooms for up to eight players
-- Keeps card faces in a player's hand out of every other player's network state
+- Supports direct peer-to-peer tables for up to eight players
+- Uses copy/paste connection codes, with no account, signaling server, or database
+- Keeps card faces in a player's hand out of every other guest's network state
 - Draws, shuffles, plays, flips, moves, and takes cards
 - Runs as a responsive, dependency-free browser client
-- Includes an offline demo that works on GitHub Pages
+- Runs entirely as a static GitHub Pages site from `/docs`
 
 ## Run locally
 
-```bash
-npm install
-npm start
-```
+Serve the `docs` directory with any static web server. WebRTC requires HTTPS or localhost. For example:
 
-Open <http://localhost:8080>. The same Node process serves the client and WebSocket endpoint.
+```bash
+npx serve docs
+```
 
 Run the checks with:
 
@@ -27,13 +27,17 @@ Run the checks with:
 npm test
 ```
 
-## Multiplayer deployment
+## Connecting players
 
-GitHub Pages hosts only static files, so the hosted page's offline demo works without a backend, while online multiplayer needs this repository's server deployed to a Node host that supports WebSockets (for example Fly.io, Render, Railway, or a VPS).
+1. The host opens LPTTS, enters a name, and chooses **Host a table**.
+2. The host clicks the table badge at the top, copies the offer code, and sends it to one player.
+3. That player chooses **Join with a connection code**, pastes the offer, and creates an answer code.
+4. The player sends the answer code to the host. The host pastes it and completes the connection.
+5. Repeat with a fresh offer for each additional player.
 
-Start the server with `npm start`; it honors the `PORT` environment variable. Enter its public `wss://` address on the LPTTS landing page. Invite links retain both the room and server address.
+The connection codes contain WebRTC session descriptions and network candidates. Treat them like temporary invitations. They do not contain cards or future game state.
 
-The server keeps rooms in memory by design. Restarting it clears active rooms, and empty rooms are immediately discarded.
+The host must remain online. Closing or reloading the host tab ends the table. Players behind especially restrictive firewalls may be unable to connect because LPTTS intentionally does not operate a TURN relay.
 
 ## TTS compatibility
 
@@ -43,9 +47,10 @@ Not currently implemented: TTS 3D objects, physics, scripting, hidden zones, cou
 
 ## Security notes
 
-- Other players receive only a hand count, player color/name, and public card backs—not private card objects.
-- Imports accept only HTTP(S) artwork URLs and cap decks at 1,000 cards on the multiplayer server.
-- The server limits WebSocket messages to 5 MB.
+- Guests receive only a hand count, player color/name, and public card backs for other hands—not their private card objects.
+- The host necessarily holds the complete game state, so players must trust the host.
+- Imports accept only HTTP(S) artwork URLs and cap decks at 1,000 cards.
+- WebRTC data channels are encrypted in transit by the browser.
 
 ## License
 

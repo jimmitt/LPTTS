@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { GameRoom } from '../server/game.js';
+import { GameRoom } from '../docs/js/game.js';
 
 const card=()=>({id:crypto.randomUUID(),name:'Secret',face:'https://example.com/f.jpg',back:'https://example.com/b.jpg',sheet:{index:0,width:1,height:1}});
 test('never exposes another player hand',()=>{const room=new GameRoom('TEST');room.join('a','Alice');room.join('b','Bob');room.importDeck([card()]);room.draw('a');assert.equal(room.viewFor('a').players[0].hand.length,1);assert.equal(room.viewFor('b').players[0].hand,undefined);assert.equal(room.viewFor('b').players[0].handCount,1);});
