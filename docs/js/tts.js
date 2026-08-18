@@ -9,7 +9,7 @@ export function parseTtsDeck(input) {
     if (state.Name === 'Card' || state.Name === 'CardCustom') {
       const cardId = Number(state.CardID || 0), deckId = Math.floor(cardId / 100), index = cardId % 100;
       const custom = decks[deckId] || {};
-      cards.push({ id: crypto.randomUUID(), name: String(state.Nickname || `Card ${index + 1}`).slice(0,120), description: String(state.Description || '').slice(0,500), face:safe(custom.FaceURL), back:safe(custom.BackURL), sheet:{index,width:Number(custom.NumWidth)||1,height:Number(custom.NumHeight)||1,uniqueBack:Boolean(custom.UniqueBack)} });
+      cards.push({ id: newId(), name: String(state.Nickname || `Card ${index + 1}`).slice(0,120), description: String(state.Description || '').slice(0,500), face:safe(custom.FaceURL), back:safe(custom.BackURL), sheet:{index,width:Number(custom.NumWidth)||1,height:Number(custom.NumHeight)||1,uniqueBack:Boolean(custom.UniqueBack)} });
       return;
     }
     for (const child of state.ContainedObjects || []) walk(child, decks);
@@ -17,4 +17,12 @@ export function parseTtsDeck(input) {
   for (const state of save?.ObjectStates || []) walk(state);
   if (!cards.length) throw new Error('No cards found in that TTS file.');
   return cards;
+}
+
+function newId() {
+  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+  const bytes = new Uint8Array(16);
+  if (globalThis.crypto?.getRandomValues) globalThis.crypto.getRandomValues(bytes);
+  else for (let i = 0; i < bytes.length; i += 1) bytes[i] = Math.floor(Math.random() * 256);
+  return [...bytes].map((value) => value.toString(16).padStart(2, '0')).join('');
 }

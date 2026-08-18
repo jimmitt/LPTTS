@@ -7,7 +7,7 @@ const RTC_CONFIG = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, { ur
 let role = '', playerId = '', state, room, hostPending, guestPeer, guestChannel;
 const peers = new Map();
 
-ui.name.value = localStorage.getItem('lptts-name') || '';
+ui.name.value = readStoredName();
 ui.form.addEventListener('submit', (event) => { event.preventDefault(); hostTable(); });
 $('#join-button').addEventListener('click', () => openJoin());
 ui.connections.addEventListener('click', () => role === 'host' ? createOffer() : toast('Only the host can add players'));
@@ -23,8 +23,13 @@ ui.deck.addEventListener('click', () => action('draw'));
 ui.shuffle.addEventListener('click', () => action('shuffle'));
 
 function hostTable() {
-  saveName(); role = 'host'; playerId = crypto.randomUUID();
-  room = new GameRoom(randomCode()); room.join(playerId, ui.name.value); updateHost(); enterGame();
+  try {
+    saveName(); role = 'host'; playerId = newId();
+    room = new GameRoom(randomCode()); room.join(playerId, ui.name.value); updateHost(); enterGame();
+  } catch (error) {
+    role = ''; ui.status.textContent = `Could not open the table: ${error.message || 'unsupported browser feature'}`;
+    console.error('LPTTS host startup failed', error);
+  }
 }
 
 function openJoin() {
@@ -39,7 +44,7 @@ async function createOffer() {
     resetDialog(true); hostPending?.peer.close();
     const peer = new RTCPeerConnection(RTC_CONFIG);
     const channel = peer.createDataChannel('lptts', { ordered: true });
-    const id = crypto.randomUUID(); hostPending = { peer, channel, id };
+    const id = newId(); hostPending = { peer, channel, id };
     wireHostPeer(hostPending); await peer.setLocalDescription(await peer.createOffer()); await iceComplete(peer);
     $('#offer-code').value = encode({ v:1, type:'offer', id, sdp:peer.localDescription });
     ui.dialog.showModal();
@@ -124,7 +129,8 @@ function cardElement(card,faceUp){const el=document.createElement('div');el.clas
 function resetDialog(host){ui.hostPanel.hidden=!host;ui.guestPanel.hidden=host;$('#connect-title').textContent=host?'Add a player':'Join a table';ui.connectStatus.textContent='';$('#answer-code').value='';}
 function enterGame(){ui.lobby.hidden=true;ui.game.hidden=false;ui.connection.textContent=role==='host'?'Hosting locally':'Connecting…';}
 function cleanName(){return ui.name.value.trim().slice(0,24)||'Player';}
-function saveName(){localStorage.setItem('lptts-name',cleanName());}
+function readStoredName(){try{return localStorage.getItem('lptts-name')||'';}catch{return '';}}
+function saveName(){try{localStorage.setItem('lptts-name',cleanName());}catch{/* Storage is optional. */}}
 function sendChannel(channel,value){if(channel?.readyState==='open')channel.send(JSON.stringify(value));}
 function connectionLabel(value){if(['failed','closed','disconnected'].includes(value))ui.connectStatus.textContent=`Connection ${value}. Create a fresh code and try again.`;}
 function iceComplete(peer){if(peer.iceGatheringState==='complete')return Promise.resolve();return new Promise((resolve)=>{const timer=setTimeout(resolve,8000);peer.addEventListener('icegatheringstatechange',()=>{if(peer.iceGatheringState==='complete'){clearTimeout(timer);resolve();}});});}
@@ -133,6 +139,7 @@ function decode(code,type){try{const normalized=code.trim().replaceAll('-','+').
 function copy(value,message){if(!value)return;navigator.clipboard.writeText(value).then(()=>toast(message)).catch(()=>toast('Select and copy the code manually',true));}
 function toast(message,error=false){ui.toast.textContent=message;ui.toast.style.background=error?'#8f3434':'';ui.toast.classList.add('show');clearTimeout(toast.timer);toast.timer=setTimeout(()=>ui.toast.classList.remove('show'),2600);}
 function randomCode(){return Math.random().toString(36).slice(2,7).toUpperCase();}
+function newId(){if(globalThis.crypto?.randomUUID)return globalThis.crypto.randomUUID();const bytes=new Uint8Array(16);if(globalThis.crypto?.getRandomValues)globalThis.crypto.getRandomValues(bytes);else for(let i=0;i<bytes.length;i++)bytes[i]=Math.floor(Math.random()*256);return [...bytes].map(value=>value.toString(16).padStart(2,'0')).join('');}
 function initials(name){return name.split(/\s+/).map(v=>v[0]).join('').slice(0,2).toUpperCase();}
 function escapeHtml(value){return String(value).replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));}
 function cssUrl(value){return String(value).replace(/["\\\n\r]/g,'');}
