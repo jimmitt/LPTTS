@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#171b18">
+  <title>LPTTS — Lightweight card table</title>
+  <meta name="description" content="A fast, private-hand 2D multiplayer card table with Tabletop Simulator deck import.">
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <div id="lobby" class="lobby">
+    <main class="lobby-card">
+      <div class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></div>
+      <p class="eyebrow">Lightweight tabletop</p>
+      <h1>Cards, without<br>the clutter.</h1>
+      <p class="lede">A tiny 2D table for sharing any TTS card deck. Your hand stays yours.</p>
+      <form id="join-form">
+        <label>Display name<input id="name" maxlength="24" required placeholder="Card shark"></label>
+        <label>Room code <span>leave blank to create</span><input id="room" maxlength="6" placeholder="FABLE"></label>
+        <label id="server-label">WebSocket server <span>optional on hosted demo</span><input id="server-url" inputmode="url" placeholder="wss://your-server.example"></label>
+        <button class="primary" type="submit">Take a seat <b>→</b></button>
+        <button class="demo" type="button" id="demo-button">Try the table offline</button>
+      </form>
+      <p id="lobby-status" class="status" role="status"></p>
+    </main>
+    <aside class="lobby-art" aria-label="Illustration of playing cards"><div class="art-card one">A<span>♠</span></div><div class="art-card two">K<span>♥</span></div><div class="art-card three"></div></aside>
+  </div>
+
+  <div id="game" class="game" hidden>
+    <header>
+      <a class="wordmark" href="./"><span class="mini-mark">▰</span> LPTTS</a>
+      <div class="room-pill"><span>ROOM</span><button id="copy-room" title="Copy invite link">------</button></div>
+      <div class="header-actions"><span id="connection" class="connection">Offline</span><button id="help" class="icon-button" title="How to play">?</button></div>
+    </header>
+
+    <div class="workspace">
+      <aside class="players-panel">
+        <h2>Players <span id="player-count">0</span></h2>
+        <div id="players"></div>
+        <div class="deck-tools">
+          <input id="tts-file" type="file" accept=".json,application/json" hidden>
+          <button id="import-button">＋ Import TTS deck</button>
+          <p>Imports TTS save/object JSON. Images load from their original URLs.</p>
+        </div>
+      </aside>
+
+      <main id="table" class="table" aria-label="Shared playing area">
+        <div class="felt-noise"></div>
+        <div id="empty-table" class="empty-table"><div class="empty-stack"><i></i><i></i><i></i></div><h2>The table is clear</h2><p>Import a deck, draw a card, or drag one here from your hand.</p></div>
+        <div id="table-cards"></div>
+        <div class="deck-zone">
+          <button id="deck" class="deck" disabled><span class="deck-count">0</span></button>
+          <div><strong>Draw pile</strong><span id="deck-label">No deck</span></div>
+          <button id="shuffle" class="small-button" disabled>Shuffle</button>
+        </div>
+      </main>
+    </div>
+
+    <section class="hand-panel">
+      <div class="hand-heading"><h2>Your hand <span id="hand-count">0</span></h2><p>Double-click a card to play it</p></div>
+      <div id="hand" class="hand"></div>
+    </section>
+    <div id="toast" class="toast" role="status"></div>
+  </div>
+
+  <dialog id="help-dialog"><button class="dialog-close" autofocus>×</button><p class="eyebrow">Quick guide</p><h2>Welcome to the table</h2><ul><li>Import a Tabletop Simulator save or saved-object JSON file.</li><li>Click the draw pile to add a private card to your hand.</li><li>Double-click a hand card to play it face-up in the center.</li><li>Drag table cards to arrange them. Double-click to flip. Right-click to take one.</li><li>Share the room link. Other players see your card backs and count—never your faces.</li></ul></dialog>
+  <script type="module" src="./js/app.js"></script>
+</body>
+</html>
