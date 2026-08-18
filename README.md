@@ -1,5 +1,7 @@
 # LPTTS
 
+[**Open the LPTTS app →**](https://jimmitt.github.io/LPTTS/)
+
 LPTTS is a lightweight, browser-based 2D card table. It imports card decks from Tabletop Simulator JSON, keeps each player's hand private, and synchronizes the shared table directly between browsers with WebRTC. The host's browser is the authoritative game server—there is no backend.
 
 ## What it does
