@@ -8,6 +8,7 @@ let role = '', playerId = '', state, room, hostPending, guestPeer, guestChannel;
 const peers = new Map();
 
 ui.name.value = readStoredName();
+window.lpttsReady = true;
 ui.form.addEventListener('submit', (event) => { event.preventDefault(); hostTable(); });
 $('#join-button').addEventListener('click', () => openJoin());
 ui.connections.addEventListener('click', () => role === 'host' ? createOffer() : toast('Only the host can add players'));

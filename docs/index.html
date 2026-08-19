@@ -64,6 +64,14 @@
 
   <dialog id="connect-dialog" class="connect-dialog"><button class="dialog-close" data-close="connect-dialog">×</button><p class="eyebrow">Connect directly</p><h2 id="connect-title">Add a player</h2><div id="connect-host"><p>Send this offer code to the player who wants to join.</p><textarea id="offer-code" readonly></textarea><button class="primary" id="copy-offer">Copy offer code</button><label>Paste their answer code<textarea id="answer-code"></textarea></label><button class="demo" id="accept-answer">Complete connection</button></div><div id="connect-guest" hidden><label>Paste the host’s offer code<textarea id="join-offer"></textarea></label><button class="primary" id="make-answer">Create answer code</button><div id="answer-result" hidden><p>Send this answer code back to the host.</p><textarea id="guest-answer" readonly></textarea><button class="demo" id="copy-answer">Copy answer code</button></div></div><p id="connect-status" class="status"></p></dialog>
   <dialog id="help-dialog"><button class="dialog-close" data-close="help-dialog" autofocus>×</button><p class="eyebrow">Quick guide</p><h2>Welcome to the table</h2><ul><li>The host clicks the table badge to create an offer code and sends it to a player.</li><li>The player creates an answer code and sends that back. No server or account is involved.</li><li>Import a Tabletop Simulator save or saved-object JSON file.</li><li>Click the draw pile to add a private card to your hand.</li><li>Double-click a hand card to play it face-up in the center.</li><li>Drag table cards to arrange them. Double-click to flip. Right-click to take one.</li></ul></dialog>
-  <script type="module" src="./js/app.js"></script>
+  <script>
+    window.setTimeout(function () {
+      if (!window.lpttsReady) {
+        var status = document.getElementById('lobby-status');
+        status.textContent = 'The app script did not load. Please reload the page or try a current browser.';
+      }
+    }, 2500);
+  </script>
+  <script type="module" src="./js/app.js" onerror="document.getElementById('lobby-status').textContent='The app script failed to load. Please reload the page.'"></script>
 </body>
 </html>

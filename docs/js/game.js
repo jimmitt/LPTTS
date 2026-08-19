@@ -71,7 +71,7 @@ export class GameRoom {
     return {
       code: this.code,
       deckCount: this.deck.length,
-      deckBack: this.deck.at(-1)?.back || '',
+      deckBack: this.deck.length ? this.deck[this.deck.length - 1].back || '' : '',
       table: this.table,
       players: [...this.players.values()].map((player) => ({
         id: player.id, name: player.name, color: player.color,
