@@ -2,7 +2,7 @@ import { GameRoom } from './game.js';
 import { parseTtsDeck } from './tts.js';
 
 const $ = (selector) => document.querySelector(selector);
-const ui = { lobby:$('#lobby'), game:$('#game'), form:$('#join-form'), name:$('#name'), status:$('#lobby-status'), players:$('#players'), playerCount:$('#player-count'), connections:$('#connections'), connection:$('#connection'), tableCards:$('#table-cards'), empty:$('#empty-table'), deck:$('#deck'), deckCount:$('.deck-count'), deckLabel:$('#deck-label'), shuffle:$('#shuffle'), hand:$('#hand'), handCount:$('#hand-count'), file:$('#tts-file'), toast:$('#toast'), dialog:$('#connect-dialog'), hostPanel:$('#connect-host'), guestPanel:$('#connect-guest'), connectStatus:$('#connect-status') };
+const ui = { lobby:$('#lobby'), game:$('#game'), form:$('#join-form'), hostButton:$('#host-button'), name:$('#name'), status:$('#lobby-status'), players:$('#players'), playerCount:$('#player-count'), connections:$('#connections'), connection:$('#connection'), tableCards:$('#table-cards'), empty:$('#empty-table'), deck:$('#deck'), deckCount:$('.deck-count'), deckLabel:$('#deck-label'), shuffle:$('#shuffle'), hand:$('#hand'), handCount:$('#hand-count'), file:$('#tts-file'), toast:$('#toast'), dialog:$('#connect-dialog'), hostPanel:$('#connect-host'), guestPanel:$('#connect-guest'), connectStatus:$('#connect-status') };
 const RTC_CONFIG = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun.cloudflare.com:3478' }] };
 let role = '', playerId = '', state, room, hostPending, guestPeer, guestChannel;
 const peers = new Map();
@@ -10,6 +10,7 @@ const peers = new Map();
 ui.name.value = readStoredName();
 window.lpttsReady = true;
 ui.form.addEventListener('submit', (event) => { event.preventDefault(); hostTable(); });
+ui.hostButton.addEventListener('click', hostTable);
 $('#join-button').addEventListener('click', () => openJoin());
 ui.connections.addEventListener('click', () => role === 'host' ? createOffer() : toast('Only the host can add players'));
 $('#copy-offer').addEventListener('click', () => copy($('#offer-code').value, 'Offer code copied'));
@@ -24,11 +25,13 @@ ui.deck.addEventListener('click', () => action('draw'));
 ui.shuffle.addEventListener('click', () => action('shuffle'));
 
 function hostTable() {
+  ui.status.textContent = 'Opening table…';
+  ui.hostButton.disabled = true;
   try {
     saveName(); role = 'host'; playerId = newId();
     room = new GameRoom(randomCode()); room.join(playerId, ui.name.value); updateHost(); enterGame();
   } catch (error) {
-    role = ''; ui.status.textContent = `Could not open the table: ${error.message || 'unsupported browser feature'}`;
+    role = ''; ui.hostButton.disabled = false; ui.status.textContent = `Could not open the table: ${error.message || 'unsupported browser feature'}`;
     console.error('LPTTS host startup failed', error);
   }
 }
