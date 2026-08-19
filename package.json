@@ -7,7 +7,7 @@
   "scripts": {
     "start": "npx serve docs",
     "test": "node --test",
-    "check": "node --check docs/js/app.js && node --check docs/js/game.js && node --check docs/js/tts.js && node --test"
+    "check": "node --check docs/js/app.js && node --check docs/js/game.js && node --check docs/js/tts.js && node --check docs/js/image-deck.js && node --test"
   },
   "engines": {
     "node": ">=20"

@@ -1,11 +1,14 @@
 import { GameRoom } from './game.js';
 import { parseTtsDeck } from './tts.js';
+import { createImageDeck } from './image-deck.js';
 
 const $ = (selector) => document.querySelector(selector);
 const ui = { lobby:$('#lobby'), game:$('#game'), form:$('#join-form'), hostButton:$('#host-button'), name:$('#name'), status:$('#lobby-status'), players:$('#players'), playerCount:$('#player-count'), connections:$('#connections'), connection:$('#connection'), tableCards:$('#table-cards'), empty:$('#empty-table'), deck:$('#deck'), deckCount:$('.deck-count'), deckLabel:$('#deck-label'), shuffle:$('#shuffle'), hand:$('#hand'), handCount:$('#hand-count'), file:$('#tts-file'), toast:$('#toast'), dialog:$('#connect-dialog'), hostPanel:$('#connect-host'), guestPanel:$('#connect-guest'), connectStatus:$('#connect-status') };
 const RTC_CONFIG = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun.cloudflare.com:3478' }] };
 let role = '', playerId = '', state, room, hostPending, guestPeer, guestChannel;
 const peers = new Map();
+const receivedAssets = new Map();
+const assetParts = new Map();
 
 ui.name.value = readStoredName();
 window.lpttsReady = true;
@@ -20,6 +23,10 @@ $('#accept-answer').addEventListener('click', acceptAnswer);
 document.querySelectorAll('[data-close]').forEach((button) => button.addEventListener('click', () => $(`#${button.dataset.close}`).close()));
 $('#help').addEventListener('click', () => $('#help-dialog').showModal());
 $('#import-button').addEventListener('click', () => role === 'host' ? ui.file.click() : toast('Only the host can import a deck', true));
+$('#image-deck-button').addEventListener('click', () => role === 'host' ? $('#image-deck-dialog').showModal() : toast('Only the host can create a deck', true));
+$('#image-deck-form').addEventListener('submit', createUploadedDeck);
+$('#face-file').addEventListener('change', updateImageSummary);
+$('#back-file').addEventListener('change', updateImageSummary);
 ui.file.addEventListener('change', importDeck);
 ui.deck.addEventListener('click', () => action('draw'));
 ui.shuffle.addEventListener('click', () => action('shuffle'));
@@ -89,7 +96,7 @@ function wireHostPeer(entry) {
 
 function wireGuestChannel(channel) {
   channel.addEventListener('open', () => { ui.dialog.close(); enterGame(); ui.connection.textContent='Connected to host'; });
-  channel.addEventListener('message', ({data}) => { const message=JSON.parse(data); if(message.type==='welcome')playerId=message.playerId; if(message.type==='state'){state=message.state;render();} if(message.type==='error')toast(message.message,true); });
+  channel.addEventListener('message', ({data}) => { const message=JSON.parse(data); if(message.type==='welcome')playerId=message.playerId; if(message.type==='asset-begin')assetParts.set(message.id,[]); if(message.type==='asset-chunk')assetParts.get(message.id)?.push(message.data); if(message.type==='asset-end'){receivedAssets.set(message.id,(assetParts.get(message.id)||[]).join(''));assetParts.delete(message.id);} if(message.type==='state'){state=restoreAssets(message.state);render();} if(message.type==='error')toast(message.message,true); });
   channel.addEventListener('close', () => { ui.connection.textContent='Host disconnected'; toast('The host ended the connection',true); });
 }
 
@@ -109,12 +116,32 @@ function applyHostAction(actor, type, body) {
 
 function updateHost() {
   state=room.viewFor(playerId); render();
-  for(const [id,entry] of peers){sendChannel(entry.channel,{type:'welcome',playerId:id});sendChannel(entry.channel,{type:'state',state:room.viewFor(id)});}
+  for(const [id,entry] of peers){sendChannel(entry.channel,{type:'welcome',playerId:id});queueSnapshot(entry,room.viewFor(id));}
 }
 
 async function importDeck() {
   try { const cards=parseTtsDeck(await ui.file.files[0].text());room.importDeck(cards);updateHost();toast(`Imported ${cards.length} cards`); }
   catch(error){toast(error.message,true);} finally{ui.file.value='';}
+}
+
+async function createUploadedDeck(event) {
+  event.preventDefault();
+  const status = $('#image-deck-status'); status.textContent = 'Reading images…';
+  try {
+    const faceFile=$('#face-file').files[0], backFile=$('#back-file').files[0];
+    if(!faceFile||!backFile)throw new Error('Choose both front and back images.');
+    if(faceFile.size>12*1024*1024||backFile.size>12*1024*1024)throw new Error('Each image must be 12 MB or smaller.');
+    const [face,back]=await Promise.all([readDataUrl(faceFile),readDataUrl(backFile)]);
+    const cards=createImageDeck({name:$('#deck-name').value,face,back,columns:$('#deck-columns').value,rows:$('#deck-rows').value,count:$('#deck-card-count').value});
+    room.importDeck(cards);updateHost();$('#image-deck-dialog').close();status.textContent='';toast(`Created ${cards.length} cards`);
+  } catch(error){status.textContent=error.message;}
+}
+
+async function updateImageSummary() {
+  const face=$('#face-file').files[0],back=$('#back-file').files[0],parts=[];
+  if(face){const size=await imageDimensions(face);parts.push(`Front: ${size.width}×${size.height}px · ${fileSize(face.size)}`);}
+  if(back){const size=await imageDimensions(back);parts.push(`Back: ${size.width}×${size.height}px · ${fileSize(back.size)}`);}
+  $('#image-summary').textContent=parts.join(' | ')||'Choose the front and back images.';
 }
 
 function render() {
@@ -129,6 +156,35 @@ function handCard(card){const el=cardElement(card,true);el.title='Double-click t
 function tableCard(card,index){const el=cardElement(card,card.faceUp);el.classList.add('table-card');el.style.left=`${card.x}%`;el.style.top=`${card.y}%`;el.style.zIndex=index+1;el.style.transform=`translate(-50%,-50%) rotate(${card.rotation||0}deg)`;el.addEventListener('dblclick',()=>action('flip',{cardId:card.id}));el.addEventListener('contextmenu',(e)=>{e.preventDefault();action('take',{cardId:card.id});});el.addEventListener('pointerdown',(event)=>drag(event,el,card));return el;}
 function drag(event,el,card){event.preventDefault();el.setPointerCapture(event.pointerId);const table=$('#table');const move=(e)=>{const box=table.getBoundingClientRect();const x=Math.max(3,Math.min(97,(e.clientX-box.left)/box.width*100));const y=Math.max(3,Math.min(97,(e.clientY-box.top)/box.height*100));el.style.left=`${x}%`;el.style.top=`${y}%`;el.dataset.x=x;el.dataset.y=y;};const up=()=>{el.removeEventListener('pointermove',move);action('move',{cardId:card.id,x:Number(el.dataset.x)||card.x,y:Number(el.dataset.y)||card.y});};el.addEventListener('pointermove',move);el.addEventListener('pointerup',up,{once:true});}
 function cardElement(card,faceUp){const el=document.createElement('div');el.className='card';if(faceUp&&card.face){const face=document.createElement('div');face.className='card-face';const {index=0,width=1,height=1}=card.sheet||{};face.style.backgroundImage=`url("${cssUrl(card.face)}")`;face.style.backgroundSize=`${width*100}% ${height*100}%`;face.style.backgroundPosition=`${width>1?(index%width)/(width-1)*100:0}% ${height>1?Math.floor(index/width)/(height-1)*100:0}%`;el.append(face);}else{const back=document.createElement('div');back.className='card-back';if(card.back){back.style.backgroundImage=`url("${cssUrl(card.back)}")`;back.style.backgroundSize='cover';back.textContent='';}else back.textContent='LPTTS';el.append(back);}if(faceUp){const name=document.createElement('span');name.className='card-name';name.textContent=card.name;el.append(name);}return el;}
+
+const hostedAssets = new Map();
+let assetSequence = 0;
+function queueSnapshot(entry, snapshot) {
+  entry.sentAssets ||= new Set();
+  entry.queue ||= Promise.resolve();
+  entry.queue = entry.queue.then(async () => {
+    if (entry.channel.readyState !== 'open') return;
+    const needed = new Map();
+    const wireState = JSON.parse(JSON.stringify(snapshot, (_key, value) => {
+      if (typeof value !== 'string' || !value.startsWith('data:image/')) return value;
+      let id = hostedAssets.get(value);
+      if (!id) { id = `image-${++assetSequence}`; hostedAssets.set(value,id); }
+      if (!entry.sentAssets.has(id)) needed.set(id,value);
+      return `asset://${id}`;
+    }));
+    for (const [id,data] of needed) {
+      sendChannel(entry.channel,{type:'asset-begin',id});
+      for(let offset=0;offset<data.length;offset+=48_000){await waitForBuffer(entry.channel);sendChannel(entry.channel,{type:'asset-chunk',id,data:data.slice(offset,offset+48_000)});}
+      sendChannel(entry.channel,{type:'asset-end',id});entry.sentAssets.add(id);
+    }
+    sendChannel(entry.channel,{type:'state',state:wireState});
+  }).catch((error)=>console.error('LPTTS state delivery failed',error));
+}
+function restoreAssets(value) { return JSON.parse(JSON.stringify(value),(_key,item)=>typeof item==='string'&&item.startsWith('asset://')?(receivedAssets.get(item.slice(8))||''):item); }
+function waitForBuffer(channel){if(channel.bufferedAmount<512_000)return Promise.resolve();channel.bufferedAmountLowThreshold=256_000;return new Promise(resolve=>{const done=()=>{channel.removeEventListener('bufferedamountlow',done);channel.removeEventListener('close',done);resolve();};channel.addEventListener('bufferedamountlow',done,{once:true});channel.addEventListener('close',done,{once:true});});}
+function readDataUrl(file){return new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result);reader.onerror=()=>reject(new Error(`Could not read ${file.name}.`));reader.readAsDataURL(file);});}
+function imageDimensions(file){return new Promise((resolve,reject)=>{const image=new Image(),url=URL.createObjectURL(file);image.onload=()=>{resolve({width:image.naturalWidth,height:image.naturalHeight});URL.revokeObjectURL(url);};image.onerror=()=>{reject(new Error(`${file.name} is not a readable image.`));URL.revokeObjectURL(url);};image.src=url;});}
+function fileSize(bytes){return bytes>=1024*1024?`${(bytes/1024/1024).toFixed(1)} MB`:`${Math.ceil(bytes/1024)} KB`;}
 
 function resetDialog(host){ui.hostPanel.hidden=!host;ui.guestPanel.hidden=host;$('#connect-title').textContent=host?'Add a player':'Join a table';ui.connectStatus.textContent='';$('#answer-code').value='';}
 function enterGame(){ui.lobby.hidden=true;ui.game.hidden=false;ui.connection.textContent=role==='host'?'Hosting locally':'Connecting…';}

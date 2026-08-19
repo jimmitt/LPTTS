@@ -7,6 +7,7 @@ LPTTS is a lightweight, browser-based 2D card table. It imports card decks from 
 ## What it does
 
 - Imports TTS save and saved-object JSON containing `Deck`, `Card`, or `CardCustom` objects
+- Creates decks directly from a local face sheet and card-back image
 - Displays TTS deck-sheet images using `CardID`, `CustomDeck`, `NumWidth`, and `NumHeight`
 - Supports direct peer-to-peer tables for up to eight players
 - Uses copy/paste connection codes, with no account, signaling server, or database
@@ -44,6 +45,16 @@ The host must remain online. Closing or reloading the host tab ends the table. P
 ## TTS compatibility
 
 Use **Objects → Saved Objects** or a game save in Tabletop Simulator, then select its `.json` file in LPTTS. Card artwork remains hosted at the URLs recorded in the TTS file; LPTTS does not copy or redistribute those images. Remote image hosts must permit browsers to load the artwork over HTTPS.
+
+TTS objects that reference `file:///` artwork cannot load those files from a web page. Choose **Create image deck**, select the local front sheet and back image, then enter the sheet's columns, rows, and actual card count. Uploaded images stay in browser memory and are transferred directly to connected players in cached chunks.
+
+For the Legendary Profiles output, use:
+
+- Front: `legendary-profiles-faces.jpg`
+- Back: `legendary-profiles-back.jpg`
+- Columns: `7`
+- Rows: `7`
+- Cards: `43`
 
 Not currently implemented: TTS 3D objects, physics, scripting, hidden zones, counters, tokens, dice, or persistence. LPTTS intentionally stays focused on cards and a flat table.
 

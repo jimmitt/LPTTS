@@ -38,7 +38,8 @@
         <div id="players"></div>
         <div class="deck-tools">
           <input id="tts-file" type="file" accept=".json,application/json" hidden>
-          <button id="import-button">＋ Import TTS deck</button>
+          <button id="import-button">＋ Import TTS JSON</button>
+          <button id="image-deck-button">▧ Create image deck</button>
           <p>Imports TTS save/object JSON. Images load from their original URLs.</p>
         </div>
       </aside>
@@ -63,6 +64,7 @@
   </div>
 
   <dialog id="connect-dialog" class="connect-dialog"><button class="dialog-close" data-close="connect-dialog">×</button><p class="eyebrow">Connect directly</p><h2 id="connect-title">Add a player</h2><div id="connect-host"><p>Send this offer code to the player who wants to join.</p><textarea id="offer-code" readonly></textarea><button class="primary" id="copy-offer">Copy offer code</button><label>Paste their answer code<textarea id="answer-code"></textarea></label><button class="demo" id="accept-answer">Complete connection</button></div><div id="connect-guest" hidden><label>Paste the host’s offer code<textarea id="join-offer"></textarea></label><button class="primary" id="make-answer">Create answer code</button><div id="answer-result" hidden><p>Send this answer code back to the host.</p><textarea id="guest-answer" readonly></textarea><button class="demo" id="copy-answer">Copy answer code</button></div></div><p id="connect-status" class="status"></p></dialog>
+  <dialog id="image-deck-dialog" class="image-deck-dialog"><button class="dialog-close" data-close="image-deck-dialog">×</button><p class="eyebrow">Local artwork</p><h2>Create image deck</h2><p>Select a face sheet containing a grid of cards and one card-back image.</p><form id="image-deck-form"><label>Deck name<input id="deck-name" maxlength="60" value="Custom deck"></label><label>Front sheet image<input id="face-file" type="file" accept="image/png,image/jpeg,image/webp" required></label><label>Back image<input id="back-file" type="file" accept="image/png,image/jpeg,image/webp" required></label><div class="deck-grid-fields"><label>Columns<input id="deck-columns" type="number" min="1" max="20" value="7" required></label><label>Rows<input id="deck-rows" type="number" min="1" max="20" value="7" required></label><label>Cards<input id="deck-card-count" type="number" min="1" max="400" value="43" required></label></div><div id="image-summary" class="image-summary">Choose the front and back images.</div><button class="primary" type="submit">Create deck <b>→</b></button></form><p id="image-deck-status" class="status"></p></dialog>
   <dialog id="help-dialog"><button class="dialog-close" data-close="help-dialog" autofocus>×</button><p class="eyebrow">Quick guide</p><h2>Welcome to the table</h2><ul><li>The host clicks the table badge to create an offer code and sends it to a player.</li><li>The player creates an answer code and sends that back. No server or account is involved.</li><li>Import a Tabletop Simulator save or saved-object JSON file.</li><li>Click the draw pile to add a private card to your hand.</li><li>Double-click a hand card to play it face-up in the center.</li><li>Drag table cards to arrange them. Double-click to flip. Right-click to take one.</li></ul></dialog>
   <script>
     window.setTimeout(function () {
@@ -72,6 +74,6 @@
       }
     }, 2500);
   </script>
-  <script type="module" src="./js/app.js?v=5" onerror="document.getElementById('lobby-status').textContent='The app script failed to load. Please reload the page.'"></script>
+  <script type="module" src="./js/app.js?v=7" onerror="document.getElementById('lobby-status').textContent='The app script failed to load. Please reload the page.'"></script>
 </body>
 </html>

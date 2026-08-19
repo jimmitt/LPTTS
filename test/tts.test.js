@@ -7,4 +7,5 @@ test('imports cards from a TTS deck sheet', () => {
   assert.equal(cards.length,2); assert.equal(cards[1].sheet.index,1); assert.equal(cards[0].sheet.width,10); assert.equal(cards[0].name,'Ace');
 });
 test('rejects files with no cards',()=>assert.throws(()=>parseTtsDeck({ObjectStates:[]}),/No cards/));
-test('drops unsafe image URL schemes',()=>{const [card]=parseTtsDeck({ObjectStates:[{Name:'Card',CardID:100,CustomDeck:{1:{FaceURL:'file:///secret'}}}]});assert.equal(card.face,'');});
+test('drops unsafe image URL schemes',()=>{const [card]=parseTtsDeck({ObjectStates:[{Name:'Card',CardID:100,CustomDeck:{1:{FaceURL:'javascript:alert(1)'}}}]});assert.equal(card.face,'');});
+test('recognizes direct TTS saved objects and explains local artwork',()=>assert.throws(()=>parseTtsDeck({Name:'DeckCustom',CustomDeck:{1:{FaceURL:'file:///faces.jpg',BackURL:'file:///back.jpg'}},ContainedObjects:[{Name:'CardCustom',CardID:100}]}),/Create image deck/));
