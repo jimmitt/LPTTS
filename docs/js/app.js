@@ -172,10 +172,105 @@ function hostTable() {
   }
 }
 
+let logEntries = [];
+
+function logConnect(message) {
+  const time = new Date().toTimeString().slice(0, 8);
+  logEntries.push(`[${time}] ${message}`);
+  const logEl = $('#connect-log');
+  const countEl = $('#log-count');
+  if (logEl) {
+    logEl.textContent = logEntries.join('\n');
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+  if (countEl) countEl.textContent = logEntries.length;
+  console.log(`[LPTTS Connect] ${message}`);
+}
+
+function clearConnectLog() {
+  logEntries = [];
+  const logEl = $('#connect-log');
+  const countEl = $('#log-count');
+  if (logEl) logEl.textContent = '';
+  if (countEl) countEl.textContent = '0';
+}
+
+function updateStatus(headline, desc, state = 'busy') {
+  const box = $('#connect-status-box');
+  const headEl = $('#status-headline');
+  const descEl = $('#connect-status');
+  if (box) {
+    box.className = `connect-status-box ${state}`;
+  }
+  if (headEl) headEl.textContent = headline;
+  if (descEl) descEl.textContent = desc;
+}
+
+function updateBadges({ stun, turn }) {
+  if (stun !== undefined) {
+    const dot = $('#dot-stun');
+    const txt = $('#text-stun');
+    if (dot && txt) {
+      dot.className = `badge-dot ${stun.status}`;
+      txt.textContent = stun.text;
+    }
+  }
+  if (turn !== undefined) {
+    const dot = $('#dot-turn');
+    const txt = $('#text-turn');
+    if (dot && txt) {
+      dot.className = `badge-dot ${turn.status}`;
+      txt.textContent = turn.text;
+    }
+  }
+}
+
 function openJoin() {
-  saveName(); role = 'guest'; ui.hostPanel.hidden = true; ui.guestPanel.hidden = false;
-  $('#connect-title').textContent = 'Join a table'; $('#answer-result').hidden = true; ui.connectStatus.textContent = '';
+  saveName();
+  role = 'guest';
+  resetDialog(false);
+  clearConnectLog();
+  const turnConfig = getEffectiveTurnConfig();
+  updateBadges({
+    stun: { status: '', text: 'Waiting for offer' },
+    turn: turnConfig ? { status: '', text: 'Configured locally' } : { status: '', text: 'From host' }
+  });
+  updateStatus('Ready to join table', 'Paste the connection code you received from the host.', '');
   ui.dialog.showModal();
+}
+
+function collectIce(peer, onCandidate) {
+  const gathered = [];
+  let completeResolve = null;
+
+  peer.addEventListener('icecandidate', (e) => {
+    if (e.candidate) {
+      gathered.push(e.candidate);
+      if (onCandidate) onCandidate(e.candidate);
+    } else {
+      if (completeResolve) completeResolve();
+    }
+  });
+
+  peer.addEventListener('icegatheringstatechange', () => {
+    if (peer.iceGatheringState === 'complete') {
+      if (completeResolve) completeResolve();
+    }
+  });
+
+  return {
+    gathered,
+    waitComplete: (timeoutMs = 6000) => {
+      if (peer.iceGatheringState === 'complete') return Promise.resolve(gathered);
+      return new Promise((resolve) => {
+        const timer = setTimeout(() => resolve(gathered), timeoutMs);
+        completeResolve = () => {
+          clearTimeout(timer);
+          resolve(gathered);
+        };
+      });
+    }
+  };
 }
 
 async function createOffer() {
@@ -183,72 +278,138 @@ async function createOffer() {
     if (peers.size >= 7) return toast('This table is full', true);
     resetDialog(true);
     hostPending?.peer.close();
-    ui.connectStatus.textContent = 'Gathering network & relay candidates…';
+    clearConnectLog();
     $('#offer-code').value = '';
     ui.dialog.showModal();
 
     const turnConfig = getEffectiveTurnConfig();
+    updateBadges({
+      stun: { status: 'busy', text: 'Searching…' },
+      turn: turnConfig ? { status: 'busy', text: 'Allocating…' } : { status: 'warn', text: 'Off (Direct only)' }
+    });
+    updateStatus('Gathering network routes…', 'Querying STUN and TURN relay servers to build offer code…', 'busy');
+    logConnect(`Initializing host offer. TURN source: ${turnConfig?.source || 'none'}`);
+
     const peer = new RTCPeerConnection(buildRtcConfig(turnConfig));
     const channel = peer.createDataChannel('lptts', { ordered: true });
     const id = newId();
     hostPending = { peer, channel, id };
     wireHostPeer(hostPending);
 
-    await peer.setLocalDescription(await peer.createOffer());
-    await iceComplete(peer);
+    let stunFound = false, relayFound = false;
+    const ice = collectIce(peer, (c) => {
+      logConnect(`Gathered ${c.type} route: ${c.address || 'peer'}:${c.port} (${c.protocol})`);
+      if (c.type === 'srflx') {
+        stunFound = true;
+        updateBadges({ stun: { status: 'ok', text: c.address } });
+      }
+      if (c.type === 'relay') {
+        relayFound = true;
+        updateBadges({ turn: { status: 'ok', text: `${c.address}:${c.port}` } });
+      }
+    });
 
-    $('#offer-code').value = await encode({ v: 1, type: 'offer', id, sdp: peer.localDescription, turn: turnConfig });
-    ui.connectStatus.textContent = 'Share this offer code with player 2.';
+    await peer.setLocalDescription(await peer.createOffer());
+    await ice.waitComplete(6000);
+
+    if (!stunFound) updateBadges({ stun: { status: 'warn', text: 'No public STUN' } });
+    if (turnConfig && !relayFound) updateBadges({ turn: { status: 'err', text: 'Relay failed' } });
+
+    const offerCode = await encode({ v: 1, type: 'offer', id, sdp: peer.localDescription, candidates: ice.gathered, turn: turnConfig });
+    $('#offer-code').value = offerCode;
+    updateStatus('Offer code ready', `Code created with ${ice.gathered.length} route(s). Copy and send it to player 2.`, 'success');
+    logConnect(`Offer code generated (${offerCode.length} chars). Awaiting player answer.`);
   } catch (error) {
-    ui.connectStatus.textContent = error.message;
+    updateStatus('Failed to create offer', error.message, 'error');
+    logConnect(`Error creating offer: ${error.message}`);
     toast(`Could not create an offer: ${error.message}`, true);
   }
 }
 
 async function makeAnswer() {
   try {
-    ui.connectStatus.textContent = 'Contacting relay & creating answer…';
+    clearConnectLog();
+    updateStatus('Parsing offer…', 'Reading host offer code and contact details…', 'busy');
+    logConnect('Guest decoding host offer code…');
+
     const offer = await decode($('#join-offer').value, 'offer');
+    logConnect(`Host offer parsed. Session ID: ${offer.id}, TURN: ${offer.turn ? 'Provided by host' : 'None'}`);
+
+    const turnConfig = offer.turn || getEffectiveTurnConfig();
+    updateBadges({
+      stun: { status: 'busy', text: 'Searching…' },
+      turn: turnConfig ? { status: 'busy', text: 'Allocating…' } : { status: 'warn', text: 'Off (Direct only)' }
+    });
+
     guestPeer?.close();
-    guestPeer = new RTCPeerConnection(buildRtcConfig(offer.turn || getEffectiveTurnConfig()));
+    guestPeer = new RTCPeerConnection(buildRtcConfig(turnConfig));
     guestPeer.addEventListener('datachannel', ({ channel }) => {
       guestChannel = channel;
+      logConnect('DataChannel received from host');
       wireGuestChannel(channel);
     });
     guestPeer.addEventListener('iceconnectionstatechange', () => {
-      if (guestPeer.iceConnectionState === 'checking') ui.connectStatus.textContent = 'Checking connection routes…';
-      if (guestPeer.iceConnectionState === 'connected') ui.connectStatus.textContent = 'Connected!';
-      if (guestPeer.iceConnectionState === 'failed') ui.connectStatus.textContent = 'Connection failed. Verify TURN relay settings.';
+      logConnect(`Guest ICE connection state -> ${guestPeer.iceConnectionState}`);
+      if (guestPeer.iceConnectionState === 'checking') updateStatus('Checking routes…', 'Testing direct and relay connection pathways…', 'busy');
+      if (guestPeer.iceConnectionState === 'connected' || guestPeer.iceConnectionState === 'completed') updateStatus('Connected!', 'Joining game table…', 'success');
+      if (guestPeer.iceConnectionState === 'failed') updateStatus('Connection failed', 'Neither direct nor relay route connected. Verify TURN relay settings.', 'error');
     });
-    guestPeer.addEventListener('connectionstatechange', () => connectionLabel(guestPeer.connectionState));
+    guestPeer.addEventListener('connectionstatechange', () => {
+      logConnect(`Guest peer connection state -> ${guestPeer.connectionState}`);
+      connectionLabel(guestPeer.connectionState);
+    });
+
+    let stunFound = false, relayFound = false;
+    const ice = collectIce(guestPeer, (c) => {
+      logConnect(`Gathered ${c.type} route: ${c.address || 'peer'}:${c.port} (${c.protocol})`);
+      if (c.type === 'srflx') {
+        stunFound = true;
+        updateBadges({ stun: { status: 'ok', text: c.address } });
+      }
+      if (c.type === 'relay') {
+        relayFound = true;
+        updateBadges({ turn: { status: 'ok', text: `${c.address}:${c.port}` } });
+      }
+    });
 
     await guestPeer.setRemoteDescription(offer.sdp);
     await guestPeer.setLocalDescription(await guestPeer.createAnswer());
-    await iceComplete(guestPeer);
+    await ice.waitComplete(6000);
 
-    $('#guest-answer').value = await encode({ v: 1, type: 'answer', id: offer.id, name: cleanName(), sdp: guestPeer.localDescription });
+    if (!stunFound) updateBadges({ stun: { status: 'warn', text: 'No public STUN' } });
+    if (turnConfig && !relayFound) updateBadges({ turn: { status: 'err', text: 'Relay failed' } });
+
+    const answerCode = await encode({ v: 1, type: 'answer', id: offer.id, name: cleanName(), sdp: guestPeer.localDescription, candidates: ice.gathered });
+    $('#guest-answer').value = answerCode;
     $('#answer-result').hidden = false;
-    ui.connectStatus.textContent = 'Send this answer to the host, then wait for the table to open.';
+    updateStatus('Answer code ready', `Answer code generated with ${ice.gathered.length} route(s). Send it back to the host.`, 'success');
+    logConnect(`Answer code generated (${answerCode.length} chars). Send back to host.`);
   } catch (error) {
-    ui.connectStatus.textContent = error.message;
+    updateStatus('Could not create answer', error.message, 'error');
+    logConnect(`Error: ${error.message}`);
   }
 }
 
 async function acceptAnswer() {
   try {
+    updateStatus('Validating answer code…', 'Reading player answer and network routes…', 'busy');
     const answer = await decode($('#answer-code').value, 'answer');
     if (!hostPending || answer.id !== hostPending.id) throw new Error('This answer does not match the current offer.');
-    hostPending.name = String(answer.name || 'Player').slice(0,24);
+
+    hostPending.name = String(answer.name || 'Player').slice(0, 24);
+    logConnect(`Accepted answer from "${hostPending.name}". Setting remote description…`);
     await hostPending.peer.setRemoteDescription(answer.sdp);
-    ui.connectStatus.textContent = 'Connecting… Keep this window open.';
+    updateStatus('Connecting to peer…', 'Testing direct and relay routes. Keep this window open…', 'busy');
   } catch (error) {
-    ui.connectStatus.textContent = error.message;
+    updateStatus('Answer code error', error.message, 'error');
+    logConnect(`Error accepting answer: ${error.message}`);
   }
 }
 
 function wireHostPeer(entry) {
   entry.channel.addEventListener('open', () => {
     try {
+      logConnect(`DataChannel open with player "${entry.name}"!`);
       room.join(entry.id, entry.name);
       peers.set(entry.id, entry);
       hostPending = undefined;
@@ -261,9 +422,10 @@ function wireHostPeer(entry) {
     }
   });
   entry.peer.addEventListener('iceconnectionstatechange', () => {
-    if (entry.peer.iceConnectionState === 'checking') ui.connectStatus.textContent = 'Connecting… checking routes.';
-    if (entry.peer.iceConnectionState === 'connected') ui.connectStatus.textContent = 'Connected! Joining room…';
-    if (entry.peer.iceConnectionState === 'failed') ui.connectStatus.textContent = 'Connection failed. Check TURN relay settings.';
+    logConnect(`Host ICE connection state -> ${entry.peer.iceConnectionState}`);
+    if (entry.peer.iceConnectionState === 'checking') updateStatus('Connecting…', 'Testing candidate routes with peer…', 'busy');
+    if (entry.peer.iceConnectionState === 'connected' || entry.peer.iceConnectionState === 'completed') updateStatus('Connected!', 'Peer handshake successful. Joining room…', 'success');
+    if (entry.peer.iceConnectionState === 'failed') updateStatus('Connection failed', 'Neither direct nor relay route connected. Verify TURN relay settings.', 'error');
   });
   entry.channel.addEventListener('message', ({ data }) => {
     try {
@@ -274,6 +436,7 @@ function wireHostPeer(entry) {
     }
   });
   entry.peer.addEventListener('connectionstatechange', () => {
+    logConnect(`Host peer connection state -> ${entry.peer.connectionState}`);
     if (['failed', 'closed', 'disconnected'].includes(entry.peer.connectionState) && peers.has(entry.id)) {
       room.leave(entry.id);
       peers.delete(entry.id);
@@ -381,7 +544,7 @@ function readStoredName(){try{return localStorage.getItem('lptts-name')||'';}cat
 function saveName(){try{localStorage.setItem('lptts-name',cleanName());}catch{/* Storage is optional. */}}
 function sendChannel(channel,value){if(channel?.readyState==='open')channel.send(JSON.stringify(value));}
 function connectionLabel(value){if(['failed','closed','disconnected'].includes(value))ui.connectStatus.textContent=`Connection ${value}. Create a fresh code and try again.`;}
-function iceComplete(peer) {
+function iceComplete(peer, onCandidate) {
   if (peer.iceGatheringState === 'complete') return Promise.resolve();
   return new Promise((resolve) => {
     let finished = false;
@@ -402,27 +565,49 @@ function iceComplete(peer) {
       if (!e.candidate) {
         clearTimeout(timer);
         done();
+      } else if (onCandidate) {
+        onCandidate(e.candidate);
       }
     });
   });
 }
-function compactSdp(sdp) {
+function compactSdp(sdp, gatheredCandidates = []) {
   const ufrag = sdp.match(/a=ice-ufrag:(.+)/)?.[1]?.trim() || '';
   const pwd = sdp.match(/a=ice-pwd:(.+)/)?.[1]?.trim() || '';
   const fp = (sdp.match(/a=fingerprint:sha-256\s+(.+)/)?.[1]?.trim() || '').replaceAll(':', '');
   const candidates = [];
-  const candRegex = /a=candidate:(\S+)\s+(\d+)\s+(\S+)\s+(\d+)\s+(\S+)\s+(\d+)\s+typ\s+(\S+)(?:\s+raddr\s+(\S+)\s+rport\s+(\d+))?/g;
-  let m;
-  while ((m = candRegex.exec(sdp)) !== null) {
-    candidates.push([
-      m[5], // ip
-      Number(m[6]), // port
-      m[7] === 'host' ? 0 : m[7] === 'srflx' ? 1 : 2, // typ
-      m[8] || '', // raddr
-      Number(m[9]) || 0, // rport
-      m[3] === 'tcp' ? 1 : 0 // transport (0=udp, 1=tcp)
-    ]);
+
+  for (const c of gatheredCandidates) {
+    if (!c) continue;
+    const candStr = typeof c === 'string' ? c : (c.candidate || '');
+    const m = candStr.match(/candidate:(\S+)\s+(\d+)\s+(\S+)\s+(\d+)\s+(\S+)\s+(\d+)\s+typ\s+(\S+)(?:\s+raddr\s+(\S+)\s+rport\s+(\d+))?/);
+    if (m) {
+      candidates.push([
+        m[5], // ip
+        Number(m[6]), // port
+        m[7] === 'host' ? 0 : m[7] === 'srflx' ? 1 : 2, // typ
+        m[8] || '', // raddr
+        Number(m[9]) || 0, // rport
+        m[3]?.toLowerCase() === 'tcp' ? 1 : 0 // transport
+      ]);
+    }
   }
+
+  if (candidates.length === 0) {
+    const candRegex = /a=candidate:(\S+)\s+(\d+)\s+(\S+)\s+(\d+)\s+(\S+)\s+(\d+)\s+typ\s+(\S+)(?:\s+raddr\s+(\S+)\s+rport\s+(\d+))?/g;
+    let m;
+    while ((m = candRegex.exec(sdp)) !== null) {
+      candidates.push([
+        m[5],
+        Number(m[6]),
+        m[7] === 'host' ? 0 : m[7] === 'srflx' ? 1 : 2,
+        m[8] || '',
+        Number(m[9]) || 0,
+        m[3]?.toLowerCase() === 'tcp' ? 1 : 0
+      ]);
+    }
+  }
+
   return { ufrag, pwd, fp, candidates };
 }
 
@@ -469,10 +654,10 @@ function expandSdp(ufrag, pwd, fp, candidates, type) {
 async function encode(value) {
   let payload;
   if (value.type === 'offer' && value.sdp?.sdp) {
-    const c = compactSdp(value.sdp.sdp);
+    const c = compactSdp(value.sdp.sdp, value.candidates || []);
     payload = [2, 'O', value.id, c.ufrag, c.pwd, c.fp, c.candidates, value.turn || null];
   } else if (value.type === 'answer' && value.sdp?.sdp) {
-    const c = compactSdp(value.sdp.sdp);
+    const c = compactSdp(value.sdp.sdp, value.candidates || []);
     payload = [2, 'A', value.id, value.name || '', c.ufrag, c.pwd, c.fp, c.candidates];
   } else {
     payload = value;
