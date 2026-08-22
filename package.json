@@ -6,8 +6,9 @@
   "type": "module",
   "scripts": {
     "start": "npx serve docs",
-    "test": "node --test",
-    "check": "node --check docs/js/app.js && node --check docs/js/game.js && node --check docs/js/tts.js && node --check docs/js/image-deck.js && node --test"
+    "test": "node --test test/*.test.js",
+    "test:e2e": "node test/e2e-connection.mjs",
+    "check": "node --check docs/js/config.js && node --check docs/js/app.js && node --check docs/js/game.js && node --check docs/js/tts.js && node --check docs/js/image-deck.js && npm test"
   },
   "engines": {
     "node": ">=20"

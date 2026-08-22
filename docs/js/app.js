@@ -1,10 +1,10 @@
 import { GameRoom } from './game.js';
 import { parseTtsDeck } from './tts.js';
 import { createImageDeck } from './image-deck.js';
+import { getEffectiveTurnConfig, getStoredTurnConfig, saveStoredTurnConfig, clearStoredTurnConfig, parseTurnJson, buildRtcConfig } from './config.js';
 
 const $ = (selector) => document.querySelector(selector);
 const ui = { lobby:$('#lobby'), game:$('#game'), form:$('#join-form'), hostButton:$('#host-button'), name:$('#name'), status:$('#lobby-status'), players:$('#players'), playerCount:$('#player-count'), connections:$('#connections'), connection:$('#connection'), tableCards:$('#table-cards'), empty:$('#empty-table'), deck:$('#deck'), deckCount:$('.deck-count'), deckLabel:$('#deck-label'), shuffle:$('#shuffle'), hand:$('#hand'), handCount:$('#hand-count'), file:$('#tts-file'), toast:$('#toast'), dialog:$('#connect-dialog'), hostPanel:$('#connect-host'), guestPanel:$('#connect-guest'), connectStatus:$('#connect-status') };
-const RTC_CONFIG = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun.cloudflare.com:3478' }] };
 let role = '', playerId = '', state, room, hostPending, guestPeer, guestChannel;
 const peers = new Map();
 const receivedAssets = new Map();
@@ -15,9 +15,21 @@ window.lpttsReady = true;
 ui.form.addEventListener('submit', (event) => { event.preventDefault(); hostTable(); });
 ui.hostButton.addEventListener('click', hostTable);
 $('#join-button').addEventListener('click', () => openJoin());
+$('#lobby-settings')?.addEventListener('click', openSettings);
+$('#game-settings')?.addEventListener('click', openSettings);
+$('#settings-form')?.addEventListener('submit', saveSettings);
+$('#setting-clear-button')?.addEventListener('click', clearSettings);
+$('#turn-file-button')?.addEventListener('click', () => $('#turn-file-input').click());
+$('#turn-file-input')?.addEventListener('change', loadTurnFile);
 ui.connections.addEventListener('click', () => role === 'host' ? createOffer() : toast('Only the host can add players'));
-$('#copy-offer').addEventListener('click', () => copy($('#offer-code').value, 'Offer code copied'));
-$('#copy-answer').addEventListener('click', () => copy($('#guest-answer').value, 'Answer code copied'));
+$('#copy-offer')?.addEventListener('click', () => copy($('#offer-code').value, 'Offer code copied'));
+$('#copy-answer')?.addEventListener('click', () => copy($('#guest-answer').value, 'Answer code copied'));
+$('#copy-offer-input')?.addEventListener('click', () => copy($('#join-offer').value, 'Offer code copied'));
+$('#copy-answer-input')?.addEventListener('click', () => copy($('#answer-code').value, 'Answer code copied'));
+$('#paste-offer')?.addEventListener('click', () => pasteInto($('#join-offer'), 'Offer code pasted'));
+$('#paste-answer')?.addEventListener('click', () => pasteInto($('#answer-code'), 'Answer code pasted'));
+$('#offer-code')?.addEventListener('click', () => { if ($('#offer-code').value) copy($('#offer-code').value, 'Offer code copied'); });
+$('#guest-answer')?.addEventListener('click', () => { if ($('#guest-answer').value) copy($('#guest-answer').value, 'Answer code copied'); });
 $('#make-answer').addEventListener('click', makeAnswer);
 $('#accept-answer').addEventListener('click', acceptAnswer);
 document.querySelectorAll('[data-close]').forEach((button) => button.addEventListener('click', () => $(`#${button.dataset.close}`).close()));
@@ -30,6 +42,95 @@ $('#back-file').addEventListener('change', updateImageSummary);
 ui.file.addEventListener('change', importDeck);
 ui.deck.addEventListener('click', () => action('draw'));
 ui.shuffle.addEventListener('click', () => action('shuffle'));
+
+function openSettings() {
+  const current = getEffectiveTurnConfig();
+  let host = current?.host || '', username = current?.username || '', credential = current?.credential || '';
+  if (Array.isArray(current?.iceServers)) {
+    const turn = current.iceServers.find(s => s.username && s.credential);
+    if (turn) {
+      username = turn.username;
+      credential = turn.credential;
+      const url = Array.isArray(turn.urls) ? turn.urls[0] : turn.urls;
+      host = url.replace(/^turn(s)?:/i, '').replace(/^stun:/i, '').split(':')[0].split('?')[0];
+    }
+  }
+  $('#setting-turn-host').value = host;
+  $('#setting-turn-user').value = username;
+  $('#setting-turn-cred').value = credential;
+  $('#settings-status').textContent = '';
+  
+  const sourceEl = $('#settings-source');
+  if (sourceEl) {
+    if (current?.source === 'file') {
+      sourceEl.textContent = '✓ Active: Loaded automatically from docs/js/config.js';
+    } else if (current?.source === 'localStorage') {
+      sourceEl.textContent = '✓ Active: Loaded from browser local storage';
+    } else {
+      sourceEl.textContent = 'Active: Using direct P2P (STUN)';
+    }
+  }
+  $('#settings-dialog').showModal();
+}
+
+function saveSettings(event) {
+  event.preventDefault();
+  try {
+    saveStoredTurnConfig({
+      host: $('#setting-turn-host').value,
+      username: $('#setting-turn-user').value,
+      credential: $('#setting-turn-cred').value
+    });
+    $('#settings-dialog').close();
+    toast('Relay settings saved');
+  } catch (error) {
+    $('#settings-status').textContent = error.message;
+  }
+}
+
+async function loadTurnFile() {
+  const fileInput = $('#turn-file-input');
+  const file = fileInput?.files?.[0];
+  if (!file) return;
+  try {
+    const text = await file.text();
+    const config = parseTurnJson(text);
+    let host = config.host || '', username = config.username || '', credential = config.credential || '';
+    if (Array.isArray(config.iceServers)) {
+      const turn = config.iceServers.find(s => s.username && s.credential);
+      if (turn) {
+        username = turn.username;
+        credential = turn.credential;
+        const url = Array.isArray(turn.urls) ? turn.urls[0] : turn.urls;
+        host = url.replace(/^turn(s)?:/i, '').replace(/^stun:/i, '').split(':')[0].split('?')[0];
+      }
+    }
+    $('#setting-turn-host').value = host;
+    $('#setting-turn-user').value = username;
+    $('#setting-turn-cred').value = credential;
+    saveStoredTurnConfig(config);
+    $('#settings-status').textContent = '';
+    const sourceEl = $('#settings-source');
+    if (sourceEl) sourceEl.textContent = `✓ Loaded from ${file.name}`;
+    toast(`Loaded TURN settings from ${file.name}`);
+  } catch (error) {
+    $('#settings-status').textContent = `Could not load file: ${error.message}`;
+  } finally {
+    fileInput.value = '';
+  }
+}
+
+function clearSettings() {
+  clearStoredTurnConfig();
+  $('#setting-turn-host').value = '';
+  $('#setting-turn-user').value = '';
+  $('#setting-turn-cred').value = '';
+  $('#settings-status').textContent = '';
+  const sourceEl = $('#settings-source');
+  if (sourceEl) sourceEl.textContent = 'Active: Using direct P2P (STUN)';
+  $('#settings-dialog').close();
+  toast('Relay settings cleared');
+}
 
 function hostTable() {
   ui.status.textContent = 'Opening table…';
@@ -53,30 +154,32 @@ async function createOffer() {
   try {
     if (peers.size >= 7) return toast('This table is full', true);
     resetDialog(true); hostPending?.peer.close();
-    const peer = new RTCPeerConnection(RTC_CONFIG);
+    const turnConfig = getEffectiveTurnConfig();
+    const peer = new RTCPeerConnection(buildRtcConfig(turnConfig));
     const channel = peer.createDataChannel('lptts', { ordered: true });
     const id = newId(); hostPending = { peer, channel, id };
     wireHostPeer(hostPending); await peer.setLocalDescription(await peer.createOffer()); await iceComplete(peer);
-    $('#offer-code').value = encode({ v:1, type:'offer', id, sdp:peer.localDescription });
+    $('#offer-code').value = await encode({ v:1, type:'offer', id, sdp:peer.localDescription, turn:turnConfig });
     ui.dialog.showModal();
   } catch (error) { toast(`Could not create an offer: ${error.message}`, true); }
 }
 
 async function makeAnswer() {
   try {
-    const offer = decode($('#join-offer').value, 'offer');
-    guestPeer?.close(); guestPeer = new RTCPeerConnection(RTC_CONFIG);
+    const offer = await decode($('#join-offer').value, 'offer');
+    guestPeer?.close();
+    guestPeer = new RTCPeerConnection(buildRtcConfig(offer.turn || getEffectiveTurnConfig()));
     guestPeer.addEventListener('datachannel', ({ channel }) => { guestChannel = channel; wireGuestChannel(channel); });
     guestPeer.addEventListener('connectionstatechange', () => connectionLabel(guestPeer.connectionState));
     await guestPeer.setRemoteDescription(offer.sdp); await guestPeer.setLocalDescription(await guestPeer.createAnswer()); await iceComplete(guestPeer);
-    $('#guest-answer').value = encode({ v:1, type:'answer', id:offer.id, name:cleanName(), sdp:guestPeer.localDescription });
+    $('#guest-answer').value = await encode({ v:1, type:'answer', id:offer.id, name:cleanName(), sdp:guestPeer.localDescription });
     $('#answer-result').hidden = false; ui.connectStatus.textContent = 'Send this answer to the host, then wait for the table to open.';
   } catch (error) { ui.connectStatus.textContent = error.message; }
 }
 
 async function acceptAnswer() {
   try {
-    const answer = decode($('#answer-code').value, 'answer');
+    const answer = await decode($('#answer-code').value, 'answer');
     if (!hostPending || answer.id !== hostPending.id) throw new Error('This answer does not match the current offer.');
     hostPending.name = String(answer.name || 'Player').slice(0,24); await hostPending.peer.setRemoteDescription(answer.sdp);
     ui.connectStatus.textContent = 'Connecting… Keep this window open.';
@@ -194,10 +297,203 @@ function saveName(){try{localStorage.setItem('lptts-name',cleanName());}catch{/*
 function sendChannel(channel,value){if(channel?.readyState==='open')channel.send(JSON.stringify(value));}
 function connectionLabel(value){if(['failed','closed','disconnected'].includes(value))ui.connectStatus.textContent=`Connection ${value}. Create a fresh code and try again.`;}
 function iceComplete(peer){if(peer.iceGatheringState==='complete')return Promise.resolve();return new Promise((resolve)=>{const timer=setTimeout(resolve,8000);peer.addEventListener('icegatheringstatechange',()=>{if(peer.iceGatheringState==='complete'){clearTimeout(timer);resolve();}});});}
-function encode(value){const bytes=new TextEncoder().encode(JSON.stringify(value));let binary='';for(const byte of bytes)binary+=String.fromCharCode(byte);return btoa(binary).replaceAll('+','-').replaceAll('/','_').replaceAll('=','');}
-function decode(code,type){try{const normalized=code.trim().replaceAll('-','+').replaceAll('_','/');const binary=atob(normalized);const bytes=Uint8Array.from(binary,c=>c.charCodeAt(0));const value=JSON.parse(new TextDecoder().decode(bytes));if(value.v!==1||value.type!==type||!value.sdp)throw 0;return value;}catch{throw new Error(`That is not a valid ${type} code.`);}}
-function copy(value,message){if(!value)return;navigator.clipboard.writeText(value).then(()=>toast(message)).catch(()=>toast('Select and copy the code manually',true));}
-function toast(message,error=false){ui.toast.textContent=message;ui.toast.style.background=error?'#8f3434':'';ui.toast.classList.add('show');clearTimeout(toast.timer);toast.timer=setTimeout(()=>ui.toast.classList.remove('show'),2600);}
+function compactSdp(sdp) {
+  const ufrag = sdp.match(/a=ice-ufrag:(.+)/)?.[1]?.trim() || '';
+  const pwd = sdp.match(/a=ice-pwd:(.+)/)?.[1]?.trim() || '';
+  const fp = (sdp.match(/a=fingerprint:sha-256\s+(.+)/)?.[1]?.trim() || '').replaceAll(':', '');
+  const candidates = [];
+  const candRegex = /a=candidate:(\S+)\s+(\d+)\s+(\S+)\s+(\d+)\s+(\S+)\s+(\d+)\s+typ\s+(\S+)(?:\s+raddr\s+(\S+)\s+rport\s+(\d+))?/g;
+  let m;
+  while ((m = candRegex.exec(sdp)) !== null) {
+    candidates.push([
+      m[5], // ip
+      Number(m[6]), // port
+      m[7] === 'host' ? 0 : m[7] === 'srflx' ? 1 : 2, // typ
+      m[8] || '', // raddr
+      Number(m[9]) || 0, // rport
+      m[3] === 'tcp' ? 1 : 0 // transport (0=udp, 1=tcp)
+    ]);
+  }
+  return { ufrag, pwd, fp, candidates };
+}
+
+function expandSdp(ufrag, pwd, fp, candidates, type) {
+  const formattedFp = fp.includes(':') ? fp : (fp.match(/.{1,2}/g)?.join(':') || fp);
+  const sessionId = Math.floor(Math.random() * 1e9);
+  let sdp = [
+    'v=0',
+    'o=- ' + sessionId + ' 2 IN IP4 127.0.0.1',
+    's=-',
+    't=0 0',
+    'a=group:BUNDLE 0',
+    'a=extmap-allow-mixed',
+    'a=msid-semantic: WMS',
+    'm=application 9 UDP/DTLS/SCTP webrtc-datachannel',
+    'c=IN IP4 0.0.0.0',
+    'a=ice-ufrag:' + ufrag,
+    'a=ice-pwd:' + pwd,
+    'a=ice-options:trickle',
+    'a=fingerprint:sha-256 ' + formattedFp,
+    'a=setup:' + (type === 'offer' ? 'actpass' : 'active'),
+    'a=mid:0',
+    'a=sctp-port:5000',
+    'a=max-message-size:262144'
+  ];
+  for (let i = 0; i < candidates.length; i++) {
+    const [ip, port, typ, raddr, rport, transport] = candidates[i];
+    const typeStr = typ === 0 ? 'host' : typ === 1 ? 'srflx' : 'relay';
+    const transStr = transport === 1 ? 'tcp' : 'udp';
+    const priority = typ === 0 ? 2113937151 : typ === 1 ? 1677729535 : 33562367;
+    let line = 'a=candidate:' + (i + 1) + ' 1 ' + transStr + ' ' + priority + ' ' + ip + ' ' + port + ' typ ' + typeStr;
+    if (raddr && rport) line += ' raddr ' + raddr + ' rport ' + rport;
+    line += ' generation 0';
+    sdp.push(line);
+  }
+  return sdp.join('\r\n') + '\r\n';
+}
+
+async function encode(value) {
+  let payload;
+  if (value.type === 'offer' && value.sdp?.sdp) {
+    const c = compactSdp(value.sdp.sdp);
+    payload = [2, 'O', value.id, c.ufrag, c.pwd, c.fp, c.candidates, value.turn || null];
+  } else if (value.type === 'answer' && value.sdp?.sdp) {
+    const c = compactSdp(value.sdp.sdp);
+    payload = [2, 'A', value.id, value.name || '', c.ufrag, c.pwd, c.fp, c.candidates];
+  } else {
+    payload = value;
+  }
+
+  const bytes = new TextEncoder().encode(JSON.stringify(payload));
+  try {
+    const cs = new CompressionStream('deflate-raw');
+    const writer = cs.writable.getWriter();
+    writer.write(bytes);
+    writer.close();
+    const compressed = new Uint8Array(await new Response(cs.readable).arrayBuffer());
+    let binary = '';
+    for (let i = 0; i < compressed.length; i++) binary += String.fromCharCode(compressed[i]);
+    return btoa(binary).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '');
+  } catch {
+    let binary = '';
+    for (const byte of bytes) binary += String.fromCharCode(byte);
+    return btoa(binary).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '');
+  }
+}
+
+async function decode(code, type) {
+  try {
+    const normalized = code.trim().replaceAll('-', '+').replaceAll('_', '/');
+    const pad = (4 - (normalized.length % 4)) % 4;
+    const padded = normalized + '='.repeat(pad);
+    const binary = atob(padded);
+    const bytes = Uint8Array.from(binary, c => c.charCodeAt(0));
+    let parsed;
+    try {
+      const ds = new DecompressionStream('deflate-raw');
+      const writer = ds.writable.getWriter();
+      writer.write(bytes);
+      writer.close();
+      const decompressed = new Uint8Array(await new Response(ds.readable).arrayBuffer());
+      parsed = JSON.parse(new TextDecoder().decode(decompressed));
+    } catch {
+      parsed = JSON.parse(new TextDecoder().decode(bytes));
+    }
+
+    if (Array.isArray(parsed) && parsed[0] === 2) {
+      if (parsed[1] === 'O' && type === 'offer') {
+        const [v, t, id, ufrag, pwd, fp, candidates, turn] = parsed;
+        return {
+          v: 1,
+          type: 'offer',
+          id,
+          sdp: { type: 'offer', sdp: expandSdp(ufrag, pwd, fp, candidates, 'offer') },
+          turn: turn || undefined
+        };
+      }
+      if (parsed[1] === 'A' && type === 'answer') {
+        const [v, t, id, name, ufrag, pwd, fp, candidates] = parsed;
+        return {
+          v: 1,
+          type: 'answer',
+          id,
+          name,
+          sdp: { type: 'answer', sdp: expandSdp(ufrag, pwd, fp, candidates, 'answer') }
+        };
+      }
+    }
+
+    if (parsed.v === 1 && parsed.type === type && parsed.sdp) {
+      return parsed;
+    }
+    throw 0;
+  } catch {
+    throw new Error(`That is not a valid ${type} code.`);
+  }
+}
+
+function copy(value, message = 'Code copied to clipboard') {
+  if (!value || !value.trim()) return toast('Nothing to copy', true);
+  const text = value.trim();
+  if (navigator.clipboard?.writeText) {
+    navigator.clipboard.writeText(text)
+      .then(() => toast(message))
+      .catch(() => fallbackCopy(text, message));
+  } else {
+    fallbackCopy(text, message);
+  }
+}
+
+function fallbackCopy(value, message) {
+  try {
+    const temp = document.createElement('textarea');
+    temp.value = value;
+    temp.style.position = 'fixed';
+    temp.style.opacity = '0';
+    document.body.appendChild(temp);
+    temp.focus();
+    temp.select();
+    document.execCommand('copy');
+    document.body.removeChild(temp);
+    toast(message);
+  } catch {
+    toast('Select and copy the code manually', true);
+  }
+}
+
+async function pasteInto(element, message = 'Pasted from clipboard') {
+  try {
+    if (navigator.clipboard?.readText) {
+      const text = await navigator.clipboard.readText();
+      if (text) {
+        element.value = text.trim();
+        toast(message);
+        return;
+      }
+    }
+  } catch {
+    /* Browser clipboard read blocked or unavailable */
+  }
+  element.focus();
+  element.select();
+  toast('Ready to paste');
+}
+
+function toast(message, error = false) {
+  ui.toast.textContent = message;
+  ui.toast.style.background = error ? '#8f3434' : '#171b18';
+
+  const openDialog = document.querySelector('dialog[open]');
+  if (openDialog && ui.toast.parentElement !== openDialog) {
+    openDialog.appendChild(ui.toast);
+  } else if (!openDialog && ui.toast.parentElement !== document.body) {
+    document.body.appendChild(ui.toast);
+  }
+
+  ui.toast.classList.add('show');
+  clearTimeout(toast.timer);
+  toast.timer = setTimeout(() => ui.toast.classList.remove('show'), 2600);
+}
 function randomCode(){return Math.random().toString(36).slice(2,7).toUpperCase();}
 function newId(){if(globalThis.crypto?.randomUUID)return globalThis.crypto.randomUUID();const bytes=new Uint8Array(16);if(globalThis.crypto?.getRandomValues)globalThis.crypto.getRandomValues(bytes);else for(let i=0;i<bytes.length;i++)bytes[i]=Math.floor(Math.random()*256);return [...bytes].map(value=>value.toString(16).padStart(2,'0')).join('');}
 function initials(name){return name.split(/\s+/).map(v=>v[0]).join('').slice(0,2).toUpperCase();}

@@ -19,6 +19,7 @@
         <label>Display name <span>optional</span><input id="name" maxlength="24" placeholder="Card shark"></label>
         <button class="primary" type="button" id="host-button">Host a table <b>→</b></button>
         <button class="demo" type="button" id="join-button">Join with a connection code</button>
+        <button class="demo settings-trigger" type="button" id="lobby-settings">⚙ Relay / TURN settings</button>
       </form>
       <p id="lobby-status" class="status" role="status"></p>
     </main>
@@ -29,7 +30,7 @@
     <header>
       <a class="wordmark" href="./"><span class="mini-mark">▰</span> LPTTS</a>
       <div class="room-pill"><span>TABLE</span><button id="connections" title="Connect another player">HOST</button></div>
-      <div class="header-actions"><span id="connection" class="connection">Not connected</span><button id="help" class="icon-button" title="How to play">?</button></div>
+      <div class="header-actions"><span id="connection" class="connection">Not connected</span><button id="game-settings" class="icon-button" title="Relay / TURN settings">⚙</button><button id="help" class="icon-button" title="How to play">?</button></div>
     </header>
 
     <div class="workspace">
@@ -63,7 +64,49 @@
     <div id="toast" class="toast" role="status"></div>
   </div>
 
-  <dialog id="connect-dialog" class="connect-dialog"><button class="dialog-close" data-close="connect-dialog">×</button><p class="eyebrow">Connect directly</p><h2 id="connect-title">Add a player</h2><div id="connect-host"><p>Send this offer code to the player who wants to join.</p><textarea id="offer-code" readonly></textarea><button class="primary" id="copy-offer">Copy offer code</button><label>Paste their answer code<textarea id="answer-code"></textarea></label><button class="demo" id="accept-answer">Complete connection</button></div><div id="connect-guest" hidden><label>Paste the host’s offer code<textarea id="join-offer"></textarea></label><button class="primary" id="make-answer">Create answer code</button><div id="answer-result" hidden><p>Send this answer code back to the host.</p><textarea id="guest-answer" readonly></textarea><button class="demo" id="copy-answer">Copy answer code</button></div></div><p id="connect-status" class="status"></p></dialog>
+  <dialog id="connect-dialog" class="connect-dialog">
+    <button class="dialog-close" data-close="connect-dialog">×</button>
+    <p class="eyebrow">Connect directly</p>
+    <h2 id="connect-title">Add a player</h2>
+    <div id="connect-host">
+      <p>Send this offer code to the player who wants to join.</p>
+      <div class="code-box-wrapper">
+        <textarea id="offer-code" readonly placeholder="Generating offer code…"></textarea>
+        <button class="primary copy-btn" id="copy-offer" type="button">📋 Copy offer code</button>
+      </div>
+      <label>Paste their answer code
+        <div class="code-box-wrapper">
+          <textarea id="answer-code" placeholder="Paste player answer code here"></textarea>
+          <div class="code-actions">
+            <button class="demo" id="paste-answer" type="button">Paste</button>
+            <button class="demo" id="copy-answer-input" type="button">Copy</button>
+          </div>
+        </div>
+      </label>
+      <button class="primary" id="accept-answer">Complete connection <b>→</b></button>
+    </div>
+    <div id="connect-guest" hidden>
+      <label>Paste the host’s offer code
+        <div class="code-box-wrapper">
+          <textarea id="join-offer" placeholder="Paste host offer code here"></textarea>
+          <div class="code-actions">
+            <button class="demo" id="paste-offer" type="button">Paste</button>
+            <button class="demo" id="copy-offer-input" type="button">Copy</button>
+          </div>
+        </div>
+      </label>
+      <button class="primary" id="make-answer">Create answer code <b>→</b></button>
+      <div id="answer-result" hidden>
+        <p>Send this answer code back to the host.</p>
+        <div class="code-box-wrapper">
+          <textarea id="guest-answer" readonly placeholder="Generating answer code…"></textarea>
+          <button class="primary copy-btn" id="copy-answer" type="button">📋 Copy answer code</button>
+        </div>
+      </div>
+    </div>
+    <p id="connect-status" class="status"></p>
+  </dialog>
+  <dialog id="settings-dialog" class="settings-dialog"><button class="dialog-close" data-close="settings-dialog">×</button><p class="eyebrow">Direct & Relay Connectivity</p><h2>Relay Settings</h2><p>For connecting across mobile hotspots, cellular data, or strict firewalls, configure a TURN relay server. You can edit <code>docs/js/config.js</code> directly, load a JSON file, or save in browser storage.</p><form id="settings-form"><label>TURN Server Host / Domain<input id="setting-turn-host" placeholder="global.relay.metered.ca" autocomplete="off" spellcheck="false"></label><label>TURN Username<input id="setting-turn-user" placeholder="Your Metered username" autocomplete="off" spellcheck="false"></label><label>TURN Credential / Password<input id="setting-turn-cred" type="password" placeholder="Your Metered credential" autocomplete="off" spellcheck="false"></label><input id="turn-file-input" type="file" accept=".json,application/json" hidden><div style="display:flex;gap:10px;margin-top:10px"><button class="primary" type="submit" style="flex:1">Save settings <b>→</b></button><button class="demo" type="button" id="turn-file-button" title="Load credentials from a JSON file">📁 Load JSON</button><button class="demo" type="button" id="setting-clear-button">Clear</button></div></form><p id="settings-source" style="font-size:11px;color:#67715f;margin:8px 0 0"></p><p id="settings-status" class="status"></p></dialog>
   <dialog id="image-deck-dialog" class="image-deck-dialog"><button class="dialog-close" data-close="image-deck-dialog">×</button><p class="eyebrow">Local artwork</p><h2>Create image deck</h2><p>Select a face sheet containing a grid of cards and one card-back image.</p><form id="image-deck-form"><label>Deck name<input id="deck-name" maxlength="60" value="Custom deck"></label><label>Front sheet image<input id="face-file" type="file" accept="image/png,image/jpeg,image/webp" required></label><label>Back image<input id="back-file" type="file" accept="image/png,image/jpeg,image/webp" required></label><div class="deck-grid-fields"><label>Columns<input id="deck-columns" type="number" min="1" max="20" value="7" required></label><label>Rows<input id="deck-rows" type="number" min="1" max="20" value="7" required></label><label>Cards<input id="deck-card-count" type="number" min="1" max="400" value="43" required></label></div><div id="image-summary" class="image-summary">Choose the front and back images.</div><button class="primary" type="submit">Create deck <b>→</b></button></form><p id="image-deck-status" class="status"></p></dialog>
   <dialog id="help-dialog"><button class="dialog-close" data-close="help-dialog" autofocus>×</button><p class="eyebrow">Quick guide</p><h2>Welcome to the table</h2><ul><li>The host clicks the table badge to create an offer code and sends it to a player.</li><li>The player creates an answer code and sends that back. No server or account is involved.</li><li>Import a Tabletop Simulator save or saved-object JSON file.</li><li>Click the draw pile to add a private card to your hand.</li><li>Double-click a hand card to play it face-up in the center.</li><li>Drag table cards to arrange them. Double-click to flip. Right-click to take one.</li></ul></dialog>
   <script>

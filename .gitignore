@@ -3,3 +3,8 @@ node_modules/
 .DS_Store
 coverage/
 npm-debug.log*
+docs/js/config.local.js
+docs/turn.json
+turn.json
+test-results/
+
