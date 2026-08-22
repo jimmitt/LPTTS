@@ -1,7 +1,7 @@
 import { GameRoom } from './game.js';
 import { parseTtsDeck } from './tts.js';
 import { createImageDeck } from './image-deck.js';
-import { getEffectiveTurnConfig, getStoredTurnConfig, saveStoredTurnConfig, clearStoredTurnConfig, parseTurnJson, buildRtcConfig } from './config.js';
+import { getEffectiveTurnConfig, getStoredTurnConfig, saveStoredTurnConfig, clearStoredTurnConfig, parseTurnJson, buildRtcConfig, testTurnConnectivity } from './config.js';
 
 const $ = (selector) => document.querySelector(selector);
 const ui = { lobby:$('#lobby'), game:$('#game'), form:$('#join-form'), hostButton:$('#host-button'), name:$('#name'), status:$('#lobby-status'), players:$('#players'), playerCount:$('#player-count'), connections:$('#connections'), connection:$('#connection'), tableCards:$('#table-cards'), empty:$('#empty-table'), deck:$('#deck'), deckCount:$('.deck-count'), deckLabel:$('#deck-label'), shuffle:$('#shuffle'), hand:$('#hand'), handCount:$('#hand-count'), file:$('#tts-file'), toast:$('#toast'), dialog:$('#connect-dialog'), hostPanel:$('#connect-host'), guestPanel:$('#connect-guest'), connectStatus:$('#connect-status') };
@@ -18,6 +18,7 @@ $('#join-button').addEventListener('click', () => openJoin());
 $('#lobby-settings')?.addEventListener('click', openSettings);
 $('#game-settings')?.addEventListener('click', openSettings);
 $('#settings-form')?.addEventListener('submit', saveSettings);
+$('#setting-test-button')?.addEventListener('click', testSettings);
 $('#setting-clear-button')?.addEventListener('click', clearSettings);
 $('#turn-file-button')?.addEventListener('click', () => $('#turn-file-input').click());
 $('#turn-file-input')?.addEventListener('change', loadTurnFile);
@@ -71,6 +72,33 @@ function openSettings() {
     }
   }
   $('#settings-dialog').showModal();
+}
+
+async function testSettings() {
+  const statusEl = $('#settings-status');
+  statusEl.textContent = 'Testing connectivity… (querying STUN & TURN relay)';
+  try {
+    const host = $('#setting-turn-host').value.trim();
+    const username = $('#setting-turn-user').value.trim();
+    const credential = $('#setting-turn-cred').value.trim();
+    const current = (host && username && credential)
+      ? { host, username, credential }
+      : getEffectiveTurnConfig();
+
+    const summary = await testTurnConnectivity(current);
+    if (summary.relayFound) {
+      statusEl.textContent = `✓ Relay active (${summary.relayIp}) | ✓ STUN OK (${summary.publicIp || 'reachable'})`;
+      toast('TURN Relay is working!');
+    } else if (summary.stunFound) {
+      statusEl.textContent = `✓ STUN OK (${summary.publicIp}) | ✗ No TURN relay candidates. Check credentials.`;
+      toast('STUN reachable, but TURN relay failed', true);
+    } else {
+      statusEl.textContent = `✗ Connection check failed: ${summary.error || 'Network error'}`;
+      toast('Relay test failed', true);
+    }
+  } catch (err) {
+    statusEl.textContent = `Error: ${err.message}`;
+  }
 }
 
 function saveSettings(event) {
@@ -153,47 +181,104 @@ function openJoin() {
 async function createOffer() {
   try {
     if (peers.size >= 7) return toast('This table is full', true);
-    resetDialog(true); hostPending?.peer.close();
+    resetDialog(true);
+    hostPending?.peer.close();
+    ui.connectStatus.textContent = 'Gathering network & relay candidates…';
+    $('#offer-code').value = '';
+    ui.dialog.showModal();
+
     const turnConfig = getEffectiveTurnConfig();
     const peer = new RTCPeerConnection(buildRtcConfig(turnConfig));
     const channel = peer.createDataChannel('lptts', { ordered: true });
-    const id = newId(); hostPending = { peer, channel, id };
-    wireHostPeer(hostPending); await peer.setLocalDescription(await peer.createOffer()); await iceComplete(peer);
-    $('#offer-code').value = await encode({ v:1, type:'offer', id, sdp:peer.localDescription, turn:turnConfig });
-    ui.dialog.showModal();
-  } catch (error) { toast(`Could not create an offer: ${error.message}`, true); }
+    const id = newId();
+    hostPending = { peer, channel, id };
+    wireHostPeer(hostPending);
+
+    await peer.setLocalDescription(await peer.createOffer());
+    await iceComplete(peer);
+
+    $('#offer-code').value = await encode({ v: 1, type: 'offer', id, sdp: peer.localDescription, turn: turnConfig });
+    ui.connectStatus.textContent = 'Share this offer code with player 2.';
+  } catch (error) {
+    ui.connectStatus.textContent = error.message;
+    toast(`Could not create an offer: ${error.message}`, true);
+  }
 }
 
 async function makeAnswer() {
   try {
+    ui.connectStatus.textContent = 'Contacting relay & creating answer…';
     const offer = await decode($('#join-offer').value, 'offer');
     guestPeer?.close();
     guestPeer = new RTCPeerConnection(buildRtcConfig(offer.turn || getEffectiveTurnConfig()));
-    guestPeer.addEventListener('datachannel', ({ channel }) => { guestChannel = channel; wireGuestChannel(channel); });
+    guestPeer.addEventListener('datachannel', ({ channel }) => {
+      guestChannel = channel;
+      wireGuestChannel(channel);
+    });
+    guestPeer.addEventListener('iceconnectionstatechange', () => {
+      if (guestPeer.iceConnectionState === 'checking') ui.connectStatus.textContent = 'Checking connection routes…';
+      if (guestPeer.iceConnectionState === 'connected') ui.connectStatus.textContent = 'Connected!';
+      if (guestPeer.iceConnectionState === 'failed') ui.connectStatus.textContent = 'Connection failed. Verify TURN relay settings.';
+    });
     guestPeer.addEventListener('connectionstatechange', () => connectionLabel(guestPeer.connectionState));
-    await guestPeer.setRemoteDescription(offer.sdp); await guestPeer.setLocalDescription(await guestPeer.createAnswer()); await iceComplete(guestPeer);
-    $('#guest-answer').value = await encode({ v:1, type:'answer', id:offer.id, name:cleanName(), sdp:guestPeer.localDescription });
-    $('#answer-result').hidden = false; ui.connectStatus.textContent = 'Send this answer to the host, then wait for the table to open.';
-  } catch (error) { ui.connectStatus.textContent = error.message; }
+
+    await guestPeer.setRemoteDescription(offer.sdp);
+    await guestPeer.setLocalDescription(await guestPeer.createAnswer());
+    await iceComplete(guestPeer);
+
+    $('#guest-answer').value = await encode({ v: 1, type: 'answer', id: offer.id, name: cleanName(), sdp: guestPeer.localDescription });
+    $('#answer-result').hidden = false;
+    ui.connectStatus.textContent = 'Send this answer to the host, then wait for the table to open.';
+  } catch (error) {
+    ui.connectStatus.textContent = error.message;
+  }
 }
 
 async function acceptAnswer() {
   try {
     const answer = await decode($('#answer-code').value, 'answer');
     if (!hostPending || answer.id !== hostPending.id) throw new Error('This answer does not match the current offer.');
-    hostPending.name = String(answer.name || 'Player').slice(0,24); await hostPending.peer.setRemoteDescription(answer.sdp);
+    hostPending.name = String(answer.name || 'Player').slice(0,24);
+    await hostPending.peer.setRemoteDescription(answer.sdp);
     ui.connectStatus.textContent = 'Connecting… Keep this window open.';
-  } catch (error) { ui.connectStatus.textContent = error.message; }
+  } catch (error) {
+    ui.connectStatus.textContent = error.message;
+  }
 }
 
 function wireHostPeer(entry) {
   entry.channel.addEventListener('open', () => {
-    try { room.join(entry.id, entry.name); peers.set(entry.id, entry); hostPending = undefined; ui.dialog.close(); updateHost(); toast(`${entry.name} joined`); }
-    catch (error) { sendChannel(entry.channel,{type:'error',message:error.message}); entry.peer.close(); }
+    try {
+      room.join(entry.id, entry.name);
+      peers.set(entry.id, entry);
+      hostPending = undefined;
+      ui.dialog.close();
+      updateHost();
+      toast(`${entry.name} joined`);
+    } catch (error) {
+      sendChannel(entry.channel, { type: 'error', message: error.message });
+      entry.peer.close();
+    }
   });
-  entry.channel.addEventListener('message', ({ data }) => { try { const message=JSON.parse(data); if(message.type==='action') applyHostAction(entry.id,message.action,message.body||{}); } catch { sendChannel(entry.channel,{type:'error',message:'Invalid action.'}); } });
+  entry.peer.addEventListener('iceconnectionstatechange', () => {
+    if (entry.peer.iceConnectionState === 'checking') ui.connectStatus.textContent = 'Connecting… checking routes.';
+    if (entry.peer.iceConnectionState === 'connected') ui.connectStatus.textContent = 'Connected! Joining room…';
+    if (entry.peer.iceConnectionState === 'failed') ui.connectStatus.textContent = 'Connection failed. Check TURN relay settings.';
+  });
+  entry.channel.addEventListener('message', ({ data }) => {
+    try {
+      const message = JSON.parse(data);
+      if (message.type === 'action') applyHostAction(entry.id, message.action, message.body || {});
+    } catch {
+      sendChannel(entry.channel, { type: 'error', message: 'Invalid action.' });
+    }
+  });
   entry.peer.addEventListener('connectionstatechange', () => {
-    if (['failed','closed','disconnected'].includes(entry.peer.connectionState) && peers.has(entry.id)) { room.leave(entry.id); peers.delete(entry.id); updateHost(); }
+    if (['failed', 'closed', 'disconnected'].includes(entry.peer.connectionState) && peers.has(entry.id)) {
+      room.leave(entry.id);
+      peers.delete(entry.id);
+      updateHost();
+    }
   });
 }
 
@@ -296,7 +381,31 @@ function readStoredName(){try{return localStorage.getItem('lptts-name')||'';}cat
 function saveName(){try{localStorage.setItem('lptts-name',cleanName());}catch{/* Storage is optional. */}}
 function sendChannel(channel,value){if(channel?.readyState==='open')channel.send(JSON.stringify(value));}
 function connectionLabel(value){if(['failed','closed','disconnected'].includes(value))ui.connectStatus.textContent=`Connection ${value}. Create a fresh code and try again.`;}
-function iceComplete(peer){if(peer.iceGatheringState==='complete')return Promise.resolve();return new Promise((resolve)=>{const timer=setTimeout(resolve,8000);peer.addEventListener('icegatheringstatechange',()=>{if(peer.iceGatheringState==='complete'){clearTimeout(timer);resolve();}});});}
+function iceComplete(peer) {
+  if (peer.iceGatheringState === 'complete') return Promise.resolve();
+  return new Promise((resolve) => {
+    let finished = false;
+    const done = () => {
+      if (!finished) {
+        finished = true;
+        resolve();
+      }
+    };
+    const timer = setTimeout(done, 6000);
+    peer.addEventListener('icegatheringstatechange', () => {
+      if (peer.iceGatheringState === 'complete') {
+        clearTimeout(timer);
+        done();
+      }
+    });
+    peer.addEventListener('icecandidate', (e) => {
+      if (!e.candidate) {
+        clearTimeout(timer);
+        done();
+      }
+    });
+  });
+}
 function compactSdp(sdp) {
   const ufrag = sdp.match(/a=ice-ufrag:(.+)/)?.[1]?.trim() || '';
   const pwd = sdp.match(/a=ice-pwd:(.+)/)?.[1]?.trim() || '';
@@ -343,9 +452,14 @@ function expandSdp(ufrag, pwd, fp, candidates, type) {
     const [ip, port, typ, raddr, rport, transport] = candidates[i];
     const typeStr = typ === 0 ? 'host' : typ === 1 ? 'srflx' : 'relay';
     const transStr = transport === 1 ? 'tcp' : 'udp';
-    const priority = typ === 0 ? 2113937151 : typ === 1 ? 1677729535 : 33562367;
+    const priority = typ === 0 ? (2113937151 - i * 1000) : typ === 1 ? (1677729535 - i * 1000) : (33562367 - i * 1000);
     let line = 'a=candidate:' + (i + 1) + ' 1 ' + transStr + ' ' + priority + ' ' + ip + ' ' + port + ' typ ' + typeStr;
-    if (raddr && rport) line += ' raddr ' + raddr + ' rport ' + rport;
+    if (raddr || rport || typ !== 0) {
+      line += ' raddr ' + (raddr || '0.0.0.0') + ' rport ' + (rport || 0);
+    }
+    if (transport === 1) {
+      line += ' tcptype active';
+    }
     line += ' generation 0';
     sdp.push(line);
   }

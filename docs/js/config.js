@@ -148,16 +148,21 @@ export function buildRtcConfig(turnConfig = null) {
     }
   } else if (config.host) {
     const host = config.host;
+    if (host.includes('metered.ca')) {
+      iceServers.push({ urls: 'stun:stun.relay.metered.ca:80' });
+    } else {
+      iceServers.push({ urls: `stun:${host}:80` }, { urls: `stun:${host}:3478` });
+    }
+
     iceServers.push(
-      { urls: `stun:stun.${host}:80` },
-      { urls: `stun:${host}:80` },
       {
         urls: [
           `turn:${host}:80`,
           `turn:${host}:80?transport=tcp`,
           `turn:${host}:443`,
           `turn:${host}:443?transport=tcp`,
-          `turns:${host}:443?transport=tcp`
+          `turns:${host}:443?transport=tcp`,
+          `turns:${host}:5349?transport=tcp`
         ],
         username: config.username,
         credential: config.credential
@@ -169,6 +174,62 @@ export function buildRtcConfig(turnConfig = null) {
     iceServers,
     iceCandidatePoolSize: 10
   };
+}
+
+/**
+ * Probes the configured STUN and TURN servers and reports real-time diagnostic results.
+ */
+export async function testTurnConnectivity(turnConfig = null) {
+  const rtcConfig = buildRtcConfig(turnConfig);
+  const pc = new RTCPeerConnection(rtcConfig);
+  pc.createDataChannel('probe');
+
+  const summary = {
+    stunFound: false,
+    relayFound: false,
+    publicIp: '',
+    relayIp: '',
+    candidates: [],
+    error: null
+  };
+
+  try {
+    await pc.setLocalDescription(await pc.createOffer());
+    await new Promise((resolve) => {
+      const timeout = setTimeout(() => {
+        pc.close();
+        resolve();
+      }, 7000);
+
+      pc.onicecandidate = (e) => {
+        if (!e.candidate) {
+          clearTimeout(timeout);
+          pc.close();
+          resolve();
+          return;
+        }
+        const c = e.candidate;
+        summary.candidates.push({
+          type: c.type,
+          protocol: c.protocol,
+          address: c.address,
+          port: c.port
+        });
+        if (c.type === 'srflx') {
+          summary.stunFound = true;
+          summary.publicIp = c.address;
+        }
+        if (c.type === 'relay') {
+          summary.relayFound = true;
+          summary.relayIp = `${c.address}:${c.port}`;
+        }
+      };
+    });
+  } catch (err) {
+    summary.error = err.message;
+  }
+
+  return summary;
 }
 
 export const RTC_CONFIG = buildRtcConfig();
