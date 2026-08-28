@@ -76,6 +76,8 @@ async function runConnectionTest() {
     await host.waitForFunction(() => document.querySelector('#player-count')?.textContent === '2');
     await guest.waitForFunction(() => document.querySelector('#player-count')?.textContent === '2');
 
+    await host.click('#chat-toggle');
+    await guest.click('#chat-toggle');
     await host.fill('#chat-input', 'Welcome to the table');
     await host.click('#chat-form button');
     await guest.waitForFunction(() => document.querySelector('#chat-messages')?.textContent.includes('Welcome to the table'));
