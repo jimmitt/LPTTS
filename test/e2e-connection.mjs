@@ -92,6 +92,13 @@ async function runConnectionTest() {
     await guest.waitForFunction(() => document.querySelector('#deck-label')?.textContent === '1 cards');
     await guest.click('#deck');
     await guest.waitForFunction(() => document.querySelector('#hand-count')?.textContent === '1');
+    await guest.hover('#hand .card');
+    await guest.keyboard.down('z');
+    await guest.waitForSelector('#card-zoom:not([hidden]) .zoom-preview');
+    await guest.keyboard.up('z');
+    await guest.waitForFunction(() => document.querySelector('#card-zoom')?.hidden);
+    await guest.press('#hand .card', 'f');
+    await guest.waitForSelector('#hand .card-back');
 
     await guest.reload();
     await guest.waitForSelector('#lobby:not([hidden])');
@@ -99,7 +106,7 @@ async function runConnectionTest() {
     await guest.click('#resume-button');
     await guest.waitForSelector('#game:not([hidden])');
     await guest.waitForFunction(() => document.querySelector('#hand-count')?.textContent === '1');
-    console.log('E2E passed: room join, private state, chat/minimize/unread, action relay, and reload resume');
+    console.log('E2E passed: room join, private state, Z zoom, F flip, chat, action relay, and resume');
     await hostContext.close(); await guestContext.close();
   } finally {
     await browser.close(); await server.close();

@@ -1,4 +1,4 @@
-import { GameRoom } from './game.js';
+import { GameRoom } from './game.js?v=2';
 import { parseTtsDeck } from './tts.js';
 import { createImageDeck } from './image-deck.js?v=2';
 import { RelaySession } from './relay.js?v=2';
@@ -13,6 +13,7 @@ const ui = {
 };
 let role = '', playerId = '', state, room, relay;
 let savedRelay;
+let hoveredCard = null, zoomHeld = false;
 const remotePlayers = new Set();
 const seenChat = new Set();
 const HOST_STATE_KEY = 'lptts-host-state-v1';
@@ -40,6 +41,9 @@ ui.shuffle.addEventListener('click', () => action('shuffle'));
 $('#chat-toggle').addEventListener('click', toggleChat);
 $('#chat-minimize').addEventListener('click', toggleChat);
 $('#chat-form').addEventListener('submit', sendChat);
+document.addEventListener('keydown', cardKeyDown);
+document.addEventListener('keyup', cardKeyUp);
+window.addEventListener('blur', hideCardZoom);
 prepareSavedSession();
 if (codeFromUrl()) openJoin();
 
@@ -127,7 +131,7 @@ function applyHostAction(actor, type, body) {
     else if (type === 'shuffle') room.shuffle();
     else if (type === 'play') room.play(actor, body.cardId, body.x, body.y);
     else if (type === 'take') room.take(actor, body.cardId);
-    else if (type === 'flip') room.flip(body.cardId);
+    else if (type === 'flip') room.flip(body.cardId, actor);
     else if (type === 'move') room.move(actor, body.cardId, body.x, body.y);
     else throw new Error('Unknown action.');
     updateHost();
@@ -199,10 +203,55 @@ function render() {
   ui.tableCards.replaceChildren(...state.table.map(tableCard)); ui.empty.hidden = state.table.length > 0;
 }
 
-function handCard(card) { const el = cardElement(card, true); el.title = 'Double-click to play'; el.addEventListener('dblclick', () => action('play', { cardId: card.id, x: 45 + Math.random() * 10, y: 42 + Math.random() * 8 })); return el; }
-function tableCard(card, index) { const el = cardElement(card, card.faceUp); el.classList.add('table-card'); el.style.left = `${card.x}%`; el.style.top = `${card.y}%`; el.style.zIndex = index + 1; el.style.transform = `translate(-50%,-50%) rotate(${card.rotation || 0}deg)`; el.addEventListener('dblclick', () => action('flip', { cardId: card.id })); el.addEventListener('contextmenu', (event) => { event.preventDefault(); action('take', { cardId: card.id }); }); el.addEventListener('pointerdown', (event) => drag(event, el, card)); return el; }
+function handCard(card) { const faceUp = card.faceUp !== false; const el = cardElement(card, faceUp); el.title = 'Double-click to play · Z zoom · F flip'; bindCardKeys(el, card, faceUp); el.addEventListener('dblclick', () => action('play', { cardId: card.id, x: 45 + Math.random() * 10, y: 42 + Math.random() * 8 })); return el; }
+function tableCard(card, index) { const el = cardElement(card, card.faceUp); el.classList.add('table-card'); el.style.left = `${card.x}%`; el.style.top = `${card.y}%`; el.style.zIndex = index + 1; el.style.transform = `translate(-50%,-50%) rotate(${card.rotation || 0}deg)`; el.title = 'Z zoom · F flip'; bindCardKeys(el, card, card.faceUp); el.addEventListener('dblclick', () => action('flip', { cardId: card.id })); el.addEventListener('contextmenu', (event) => { event.preventDefault(); action('take', { cardId: card.id }); }); el.addEventListener('pointerdown', (event) => drag(event, el, card)); return el; }
 function drag(event, el, card) { event.preventDefault(); el.setPointerCapture(event.pointerId); const table = $('#table'); const move = (e) => { const box = table.getBoundingClientRect(); const x = Math.max(3, Math.min(97, (e.clientX - box.left) / box.width * 100)); const y = Math.max(3, Math.min(97, (e.clientY - box.top) / box.height * 100)); el.style.left = `${x}%`; el.style.top = `${y}%`; el.dataset.x = x; el.dataset.y = y; }; const up = () => { el.removeEventListener('pointermove', move); action('move', { cardId: card.id, x: Number(el.dataset.x) || card.x, y: Number(el.dataset.y) || card.y }); }; el.addEventListener('pointermove', move); el.addEventListener('pointerup', up, { once: true }); }
 function cardElement(card, faceUp) { const el = document.createElement('div'); el.className = 'card'; if (faceUp && card.face) { const face = document.createElement('div'); face.className = 'card-face'; const { index = 0, width = 1, height = 1 } = card.sheet || {}; face.style.backgroundImage = `url("${cssUrl(card.face)}")`; face.style.backgroundSize = `${width * 100}% ${height * 100}%`; face.style.backgroundPosition = `${width > 1 ? (index % width) / (width - 1) * 100 : 0}% ${height > 1 ? Math.floor(index / width) / (height - 1) * 100 : 0}%`; el.append(face); } else { const back = document.createElement('div'); back.className = 'card-back'; if (card.back) { back.style.backgroundImage = `url("${cssUrl(card.back)}")`; back.style.backgroundSize = 'cover'; back.textContent = ''; } else back.textContent = 'LPTTS'; el.append(back); } if (faceUp) { const name = document.createElement('span'); name.className = 'card-name'; name.textContent = card.name; el.append(name); } return el; }
+
+function bindCardKeys(element, card, faceUp) {
+  element.addEventListener('pointerenter', () => {
+    hoveredCard = { element, card, faceUp };
+    if (zoomHeld) showCardZoom();
+  });
+  element.addEventListener('pointerleave', () => {
+    if (hoveredCard?.element === element) hoveredCard = null;
+    hideCardZoom();
+  });
+}
+
+function cardKeyDown(event) {
+  if (isTyping(event.target)) return;
+  const key = event.key.toLowerCase();
+  if (key === 'z' && hoveredCard) {
+    event.preventDefault(); zoomHeld = true; showCardZoom();
+  }
+  if (key === 'f' && hoveredCard && !event.repeat) {
+    event.preventDefault();
+    const cardId = hoveredCard.card.id;
+    hoveredCard = null; hideCardZoom();
+    action('flip', { cardId });
+  }
+}
+
+function cardKeyUp(event) {
+  if (event.key.toLowerCase() === 'z') { zoomHeld = false; hideCardZoom(); }
+}
+
+function showCardZoom() {
+  if (!hoveredCard) return;
+  const preview = cardElement(hoveredCard.card, hoveredCard.faceUp);
+  preview.classList.add('zoom-preview');
+  const overlay = $('#card-zoom');
+  overlay.replaceChildren(preview); overlay.hidden = false;
+}
+
+function hideCardZoom() {
+  zoomHeld = false;
+  const overlay = $('#card-zoom');
+  overlay.hidden = true; overlay.replaceChildren();
+}
+
+function isTyping(target) { return target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target?.isContentEditable; }
 
 async function sendChat(event) {
   event.preventDefault();

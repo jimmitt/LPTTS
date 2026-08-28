@@ -60,7 +60,7 @@ export class GameRoom {
     const index = player?.hand.findIndex((card) => card.id === cardId) ?? -1;
     if (index < 0) throw new Error('That card is not in your hand.');
     const [card] = player.hand.splice(index, 1);
-    this.table.push({ ...card, owner: playerId, x: clamp(x), y: clamp(y), faceUp: true, rotation: 0 });
+    this.table.push({ ...card, owner: playerId, x: clamp(x), y: clamp(y), faceUp: card.faceUp !== false, rotation: 0 });
   }
 
   move(playerId, cardId, x, y) {
@@ -76,10 +76,15 @@ export class GameRoom {
     this.players.get(playerId)?.hand.push({ ...card, owner: playerId });
   }
 
-  flip(cardId) {
+  flip(cardId, playerId = null) {
     const card = this.table.find((item) => item.id === cardId);
-    if (!card) throw new Error('Card not found.');
-    card.faceUp = !card.faceUp;
+    if (card) {
+      card.faceUp = !card.faceUp;
+      return;
+    }
+    const handCard = playerId ? this.players.get(playerId)?.hand.find((item) => item.id === cardId) : null;
+    if (!handCard) throw new Error('Card not found.');
+    handCard.faceUp = handCard.faceUp === false;
   }
 
   viewFor(viewerId) {
