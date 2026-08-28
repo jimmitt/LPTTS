@@ -203,9 +203,88 @@ function render() {
   ui.tableCards.replaceChildren(...state.table.map(tableCard)); ui.empty.hidden = state.table.length > 0;
 }
 
-function handCard(card) { const faceUp = card.faceUp !== false; const el = cardElement(card, faceUp); el.title = 'Double-click to play · Z zoom · F flip'; bindCardKeys(el, card, faceUp); el.addEventListener('dblclick', () => action('play', { cardId: card.id, x: 45 + Math.random() * 10, y: 42 + Math.random() * 8 })); return el; }
-function tableCard(card, index) { const el = cardElement(card, card.faceUp); el.classList.add('table-card'); el.style.left = `${card.x}%`; el.style.top = `${card.y}%`; el.style.zIndex = index + 1; el.style.transform = `translate(-50%,-50%) rotate(${card.rotation || 0}deg)`; el.title = 'Z zoom · F flip'; bindCardKeys(el, card, card.faceUp); el.addEventListener('dblclick', () => action('flip', { cardId: card.id })); el.addEventListener('contextmenu', (event) => { event.preventDefault(); action('take', { cardId: card.id }); }); el.addEventListener('pointerdown', (event) => drag(event, el, card)); return el; }
-function drag(event, el, card) { event.preventDefault(); el.setPointerCapture(event.pointerId); const table = $('#table'); const move = (e) => { const box = table.getBoundingClientRect(); const x = Math.max(3, Math.min(97, (e.clientX - box.left) / box.width * 100)); const y = Math.max(3, Math.min(97, (e.clientY - box.top) / box.height * 100)); el.style.left = `${x}%`; el.style.top = `${y}%`; el.dataset.x = x; el.dataset.y = y; }; const up = () => { el.removeEventListener('pointermove', move); action('move', { cardId: card.id, x: Number(el.dataset.x) || card.x, y: Number(el.dataset.y) || card.y }); }; el.addEventListener('pointermove', move); el.addEventListener('pointerup', up, { once: true }); }
+function handCard(card) {
+  const faceUp = card.faceUp !== false, el = cardElement(card, faceUp);
+  el.title = 'Drag to table · Double-click to play · Z zoom · F flip';
+  bindCardKeys(el, card, faceUp);
+  el.addEventListener('pointerdown', (event) => dragFromHand(event, el, card));
+  el.addEventListener('dblclick', () => action('play', { cardId: card.id, x: 45 + Math.random() * 10, y: 42 + Math.random() * 8 }));
+  return el;
+}
+
+function tableCard(card, index) {
+  const el = cardElement(card, card.faceUp);
+  el.classList.add('table-card'); el.style.left = `${card.x}%`; el.style.top = `${card.y}%`; el.style.zIndex = index + 1;
+  el.style.transform = `translate(-50%,-50%) rotate(${card.rotation || 0}deg)`;
+  el.title = 'Drag to move or return to hand · Z zoom · F flip';
+  bindCardKeys(el, card, card.faceUp);
+  el.addEventListener('dblclick', () => action('flip', { cardId: card.id }));
+  el.addEventListener('contextmenu', (event) => { event.preventDefault(); action('take', { cardId: card.id }); });
+  el.addEventListener('pointerdown', (event) => dragTableCard(event, el, card));
+  return el;
+}
+
+function dragFromHand(event, el, card) {
+  if (event.button !== 0) return;
+  event.preventDefault(); el.setPointerCapture(event.pointerId);
+  const start = { x: event.clientX, y: event.clientY };
+  const table = $('#table');
+  let dragging = false, ghost;
+  const move = (e) => {
+    if (!dragging && Math.hypot(e.clientX - start.x, e.clientY - start.y) < 6) return;
+    if (!dragging) {
+      dragging = true; hoveredCard = null; hideCardZoom();
+      ghost = el.cloneNode(true); ghost.classList.add('drag-ghost'); document.body.append(ghost);
+    }
+    ghost.style.left = `${e.clientX}px`; ghost.style.top = `${e.clientY}px`;
+    table.classList.toggle('drop-target', pointInside(table, e.clientX, e.clientY));
+  };
+  const finish = (e, cancelled = false) => {
+    el.removeEventListener('pointermove', move); el.removeEventListener('pointerup', up); el.removeEventListener('pointercancel', cancel);
+    table.classList.remove('drop-target'); ghost?.remove();
+    if (!cancelled && dragging && pointInside(table, e.clientX, e.clientY)) {
+      const position = tablePosition(e.clientX, e.clientY);
+      action('play', { cardId: card.id, ...position });
+    }
+  };
+  const up = (e) => finish(e);
+  const cancel = (e) => finish(e, true);
+  el.addEventListener('pointermove', move); el.addEventListener('pointerup', up, { once: true }); el.addEventListener('pointercancel', cancel, { once: true });
+}
+
+function dragTableCard(event, el, card) {
+  if (event.button !== 0) return;
+  event.preventDefault(); el.setPointerCapture(event.pointerId);
+  const handPanel = $('.hand-panel');
+  const move = (e) => {
+    const position = tablePosition(e.clientX, e.clientY);
+    el.style.left = `${position.x}%`; el.style.top = `${position.y}%`; el.dataset.x = position.x; el.dataset.y = position.y;
+    handPanel.classList.toggle('drop-target', pointInside(handPanel, e.clientX, e.clientY));
+  };
+  const finish = (e, cancelled = false) => {
+    el.removeEventListener('pointermove', move); el.removeEventListener('pointerup', up); el.removeEventListener('pointercancel', cancel);
+    handPanel.classList.remove('drop-target');
+    if (cancelled) { el.style.left = `${card.x}%`; el.style.top = `${card.y}%`; return; }
+    if (pointInside(handPanel, e.clientX, e.clientY)) action('take', { cardId: card.id });
+    else action('move', { cardId: card.id, x: Number(el.dataset.x) || card.x, y: Number(el.dataset.y) || card.y });
+  };
+  const up = (e) => finish(e);
+  const cancel = (e) => finish(e, true);
+  el.addEventListener('pointermove', move); el.addEventListener('pointerup', up, { once: true }); el.addEventListener('pointercancel', cancel, { once: true });
+}
+
+function tablePosition(clientX, clientY) {
+  const box = $('#table').getBoundingClientRect();
+  return {
+    x: Math.max(3, Math.min(97, (clientX - box.left) / box.width * 100)),
+    y: Math.max(3, Math.min(97, (clientY - box.top) / box.height * 100))
+  };
+}
+
+function pointInside(element, x, y) {
+  const box = element.getBoundingClientRect();
+  return x >= box.left && x <= box.right && y >= box.top && y <= box.bottom;
+}
 function cardElement(card, faceUp) { const el = document.createElement('div'); el.className = 'card'; if (faceUp && card.face) { const face = document.createElement('div'); face.className = 'card-face'; const { index = 0, width = 1, height = 1 } = card.sheet || {}; face.style.backgroundImage = `url("${cssUrl(card.face)}")`; face.style.backgroundSize = `${width * 100}% ${height * 100}%`; face.style.backgroundPosition = `${width > 1 ? (index % width) / (width - 1) * 100 : 0}% ${height > 1 ? Math.floor(index / width) / (height - 1) * 100 : 0}%`; el.append(face); } else { const back = document.createElement('div'); back.className = 'card-back'; if (card.back) { back.style.backgroundImage = `url("${cssUrl(card.back)}")`; back.style.backgroundSize = 'cover'; back.textContent = ''; } else back.textContent = 'LPTTS'; el.append(back); } if (faceUp) { const name = document.createElement('span'); name.className = 'card-name'; name.textContent = card.name; el.append(name); } return el; }
 
 function bindCardKeys(element, card, faceUp) {

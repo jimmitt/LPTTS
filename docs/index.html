@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#171b18">
   <title>LPTTS — Lightweight card table</title>
   <meta name="description" content="A fast, private-hand 2D multiplayer card table with Tabletop Simulator deck import.">
-  <link rel="stylesheet" href="./styles.css?v=8">
+  <link rel="stylesheet" href="./styles.css?v=9">
 </head>
 <body>
   <div id="lobby" class="lobby">
@@ -58,7 +58,7 @@
     </div>
 
     <section class="hand-panel">
-      <div class="hand-heading"><h2>Your hand <span id="hand-count">0</span></h2><p>Double-click to play · Z zoom · F flip</p></div>
+      <div class="hand-heading"><h2>Your hand <span id="hand-count">0</span></h2><p>Drag to play · Z zoom · F flip</p></div>
       <div id="hand" class="hand"></div>
     </section>
     <aside id="chat-panel" class="chat-panel minimized" aria-label="Table chat">
@@ -91,7 +91,7 @@
 
   </dialog>
   <dialog id="image-deck-dialog" class="image-deck-dialog"><button class="dialog-close" data-close="image-deck-dialog">×</button><p class="eyebrow">Local artwork</p><h2>Create image deck</h2><p>Select a face sheet containing a grid of cards and one card-back image.</p><form id="image-deck-form"><label>Deck name<input id="deck-name" maxlength="60" value="Custom deck"></label><label>Front sheet image<input id="face-file" type="file" accept="image/png,image/jpeg,image/webp" required></label><label>Back image<input id="back-file" type="file" accept="image/png,image/jpeg,image/webp" required></label><div class="deck-grid-fields"><label>Columns<input id="deck-columns" type="number" min="1" max="20" value="7" required></label><label>Rows<input id="deck-rows" type="number" min="1" max="20" value="7" required></label><label>Cards<input id="deck-card-count" type="number" min="1" max="400" value="43" required></label></div><div id="image-summary" class="image-summary">Choose the front and back images.</div><button class="primary" type="submit">Create deck <b>→</b></button></form><p id="image-deck-status" class="status"></p></dialog>
-  <dialog id="help-dialog"><button class="dialog-close" data-close="help-dialog" autofocus>×</button><p class="eyebrow">Quick guide</p><h2>Welcome to the table</h2><ul><li>The host shares the six-character table code or invite link.</li><li>Players join through the relay, with no connection-code exchange or network setup.</li><li>Import a Tabletop Simulator save or saved-object JSON file.</li><li>Click the draw pile to add a private card to your hand.</li><li>Hover over a card and hold Z to zoom it. Press F to flip it.</li><li>Double-click a hand card to play it in the center.</li><li>Drag table cards to arrange them. Double-click to flip. Right-click to take one.</li><li>Use the chat button in the header; chat can be minimized at any time.</li></ul></dialog>
+  <dialog id="help-dialog"><button class="dialog-close" data-close="help-dialog" autofocus>×</button><p class="eyebrow">Quick guide</p><h2>Welcome to the table</h2><ul><li>The host shares the six-character table code or invite link.</li><li>Players join through the relay, with no connection-code exchange or network setup.</li><li>Import a Tabletop Simulator save or saved-object JSON file.</li><li>Click the draw pile to add a private card to your hand.</li><li>Hover over a card and hold Z to zoom it. Press F to flip it.</li><li>Drag a hand card onto the table to play it at that position.</li><li>Drag table cards to arrange them or drop one on your hand to take it back.</li><li>Double-click a card to play or flip it. Right-click a table card to take it.</li><li>Use the chat button in the header; chat can be minimized at any time.</li></ul></dialog>
   <script>
     window.setTimeout(function () {
       if (!window.lpttsReady) {
@@ -100,6 +100,6 @@
       }
     }, 2500);
   </script>
-  <script type="module" src="./js/app.js?v=11" onerror="document.getElementById('lobby-status').textContent='The app script failed to load. Please reload the page.'"></script>
+  <script type="module" src="./js/app.js?v=12" onerror="document.getElementById('lobby-status').textContent='The app script failed to load. Please reload the page.'"></script>
 </body>
 </html>

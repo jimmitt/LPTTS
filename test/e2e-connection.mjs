@@ -95,10 +95,31 @@ async function runConnectionTest() {
     await guest.hover('#hand .card');
     await guest.keyboard.down('z');
     await guest.waitForSelector('#card-zoom:not([hidden]) .zoom-preview');
+    const zoomMetrics = await guest.locator('#card-zoom').evaluate((overlay) => {
+      const box = overlay.querySelector('.zoom-preview').getBoundingClientRect();
+      return { height: box.height, viewportHeight: innerHeight, zIndex: Number(getComputedStyle(overlay).zIndex) };
+    });
+    if (zoomMetrics.height < zoomMetrics.viewportHeight * 0.85 || zoomMetrics.zIndex < 1_000_000) throw new Error('Zoom preview is not large enough or above the app UI.');
     await guest.keyboard.up('z');
     await guest.waitForFunction(() => document.querySelector('#card-zoom')?.hidden);
     await guest.press('#hand .card', 'f');
     await guest.waitForSelector('#hand .card-back');
+    const handCardBox = await guest.locator('#hand .card').boundingBox();
+    const tableBox = await guest.locator('#table').boundingBox();
+    await guest.mouse.move(handCardBox.x + handCardBox.width / 2, handCardBox.y + handCardBox.height / 2);
+    await guest.mouse.down();
+    await guest.mouse.move(tableBox.x + tableBox.width / 2, tableBox.y + tableBox.height / 2, { steps: 8 });
+    await guest.mouse.up();
+    await guest.waitForSelector('#table-cards .card-back');
+    await guest.waitForFunction(() => document.querySelector('#hand-count')?.textContent === '0');
+    const tableCardBox = await guest.locator('#table-cards .card').boundingBox();
+    const handPanelBox = await guest.locator('.hand-panel').boundingBox();
+    await guest.mouse.move(tableCardBox.x + tableCardBox.width / 2, tableCardBox.y + tableCardBox.height / 2);
+    await guest.mouse.down();
+    await guest.mouse.move(handPanelBox.x + handPanelBox.width / 2, handPanelBox.y + handPanelBox.height / 2, { steps: 8 });
+    await guest.mouse.up();
+    await guest.waitForSelector('#hand .card-back');
+    await guest.waitForFunction(() => document.querySelector('#table-cards')?.children.length === 0);
 
     await guest.reload();
     await guest.waitForSelector('#lobby:not([hidden])');
@@ -106,7 +127,7 @@ async function runConnectionTest() {
     await guest.click('#resume-button');
     await guest.waitForSelector('#game:not([hidden])');
     await guest.waitForFunction(() => document.querySelector('#hand-count')?.textContent === '1');
-    console.log('E2E passed: room join, private state, Z zoom, F flip, chat, action relay, and resume');
+    console.log('E2E passed: Z zoom, F flip, drag hand↔table, chat, multiplayer state, and resume');
     await hostContext.close(); await guestContext.close();
   } finally {
     await browser.close(); await server.close();
