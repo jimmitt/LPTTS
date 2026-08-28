@@ -1,7 +1,7 @@
 import { GameRoom } from './game.js';
 import { parseTtsDeck } from './tts.js';
-import { createImageDeck } from './image-deck.js';
-import { RelaySession } from './relay.js';
+import { createImageDeck } from './image-deck.js?v=2';
+import { RelaySession } from './relay.js?v=2';
 
 const $ = (selector) => document.querySelector(selector);
 const ui = {
@@ -159,7 +159,7 @@ async function createUploadedDeck(event) {
     if (!faceFile || !backFile) throw new Error('Choose both front and back images.');
     if (faceFile.size > 12 * 1024 * 1024 || backFile.size > 12 * 1024 * 1024) throw new Error('Each image must be 12 MB or smaller.');
     const upload = async (file, label) => {
-      const result = await relay.upload(file, (progress) => { status.textContent = `Uploading ${label}… ${Math.round(progress * 100)}%`; });
+      const result = await relay.upload(file, (progress, attempt) => { status.textContent = `Uploading ${label}… ${Math.round(progress * 100)}%${attempt > 1 ? ` (retry ${attempt})` : ''}`; });
       return result.url;
     };
     const face = await upload(faceFile, 'card faces');

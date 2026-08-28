@@ -14,3 +14,11 @@ test('creates the requested number of cards from an image grid', () => {
 test('rejects a card count larger than the grid', () => {
   assert.throws(()=>createImageDeck({face:image,back:image,columns:2,rows:2,count:5}),/cannot exceed/);
 });
+
+test('creates a deck from temporary HTTPS relay artwork', () => {
+  const face='https://api.msyumyum.com/lptts.php?asset=front';
+  const back='https://api.msyumyum.com/lptts.php?asset=back';
+  const cards=createImageDeck({name:'Uploaded',face,back,columns:2,rows:2,count:4});
+  assert.equal(cards[0].face,face);
+  assert.equal(cards[3].back,back);
+});

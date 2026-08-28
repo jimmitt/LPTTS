@@ -50,16 +50,17 @@ export class RelaySession {
   }
 
   async upload(file, onProgress = () => {}) {
-    const started = await request({ op: 'asset_start', token: this.token, mime: file.type, size: file.size });
-    const chunkSize = 192 * 1024;
-    for (let offset = 0; offset < file.size; offset += chunkSize) {
-      const bytes = new Uint8Array(await file.slice(offset, offset + chunkSize).arrayBuffer());
-      let binary = '';
-      for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
-      const result = await request({ op: 'asset_chunk', token: this.token, uploadId: started.uploadId, offset, data: btoa(binary) });
-      onProgress(result.received / file.size);
+    let lastError;
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      try {
+        return await multipartUpload(this.token, file, (progress) => onProgress(progress, attempt));
+      } catch (error) {
+        lastError = error;
+        if (!error.retryable || attempt === 3) break;
+        await delay(attempt * 1000);
+      }
     }
-    return request({ op: 'asset_finish', token: this.token, uploadId: started.uploadId });
+    throw lastError;
   }
 
   start() { if (!this.running) { this.running = true; this.poll(); } }
@@ -105,6 +106,36 @@ async function request(body, signal) {
     if (error.name === 'AbortError') throw new Error('Relay request timed out.');
     throw error;
   }
+}
+
+function multipartUpload(token, file, onProgress) {
+  return new Promise((resolve, reject) => {
+    const form = new FormData();
+    form.append('op', 'asset_upload');
+    form.append('token', token);
+    form.append('image', file, file.name);
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', RELAY_URL);
+    xhr.timeout = 120000;
+    xhr.upload.addEventListener('progress', (event) => {
+      if (event.lengthComputable) onProgress(event.loaded / event.total);
+    });
+    xhr.addEventListener('load', () => {
+      let data = {};
+      try { data = JSON.parse(xhr.responseText); } catch { /* Report the HTTP failure below. */ }
+      if (xhr.status >= 200 && xhr.status < 300 && data.ok) resolve(data);
+      else reject(uploadError(data.message || `Upload returned ${xhr.status || 'an invalid response'}.`, xhr.status === 0 || xhr.status >= 500));
+    });
+    xhr.addEventListener('error', () => reject(uploadError('The image upload was interrupted.', true)));
+    xhr.addEventListener('timeout', () => reject(uploadError('The image upload timed out.', true)));
+    xhr.send(form);
+  });
+}
+
+function uploadError(message, retryable) {
+  const error = new Error(message);
+  error.retryable = retryable;
+  return error;
 }
 
 function delay(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
