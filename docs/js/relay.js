@@ -49,6 +49,11 @@ export class RelaySession {
     return this.sendQueue;
   }
 
+  snapshot(state) {
+    this.sendQueue = this.sendQueue.catch(() => {}).then(() => request({ op: 'snapshot', token: this.token, state }));
+    return this.sendQueue;
+  }
+
   async upload(file, onProgress = () => {}) {
     let lastError;
     for (let attempt = 1; attempt <= 3; attempt += 1) {

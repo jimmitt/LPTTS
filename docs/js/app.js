@@ -57,7 +57,8 @@ async function hostTable() {
     relay = await RelaySession.create(cleanName(), relayHandlers());
     role = 'host'; playerId = relay.participantId;
     room = new GameRoom(relay.code); room.join(playerId, cleanName());
-    enterGame(); updateHost(); relay.start(); showInvite();
+    enterGame(); updateHost(); relay.start();
+    toast(`Table ${relay.code} is ready`);
   } catch (error) {
     ui.status.textContent = `Could not open the table: ${error.message}`;
     ui.hostButton.disabled = false;
@@ -96,6 +97,7 @@ function showInvite() {
 
 async function handleEvent(event) {
   const data = event.data || {};
+  if (event.type === 'shutdown') { endTable(data.message || 'This table was closed by an administrator.'); return; }
   if (event.type === 'chat') { addChat({ ...data, eventId: event.id }); return; }
   if (role === 'host') {
     if (event.type === 'join') {
@@ -143,6 +145,7 @@ function applyHostAction(actor, type, body) {
 
 function updateHost() {
   state = room.viewFor(playerId); render(); saveHostState();
+  relay.snapshot(room.viewFor(null)).catch(networkError);
   for (const id of remotePlayers) {
     if (!room.players.has(id)) continue;
     relay.send([
@@ -377,7 +380,9 @@ function resumeSession() {
       for (const id of room.players.keys()) if (id !== playerId) remotePlayers.add(id);
       state = room.viewFor(playerId);
     } else state = JSON.parse(sessionStorage.getItem(GUEST_STATE_KEY) || 'null');
-    enterGame(); render(); relay.start();
+    enterGame(); relay.start();
+    if (role === 'host') updateHost();
+    else render();
   } catch {
     relay.clear(); relay = null; savedRelay = null; role = '';
     $('#resume-button').hidden = true;
@@ -388,6 +393,17 @@ function resumeSession() {
 function saveHostState() { try { sessionStorage.setItem(HOST_STATE_KEY, JSON.stringify(room.serialize())); } catch { /* Optional. */ } }
 function saveGuestState() { try { sessionStorage.setItem(GUEST_STATE_KEY, JSON.stringify(state)); } catch { /* Optional. */ } }
 function enterGame() { ui.lobby.hidden = true; ui.game.hidden = false; ui.connection.textContent = role === 'host' ? 'Relay online · hosting' : 'Joining table…'; }
+function endTable(message) {
+  relay?.stop(); relay?.clear();
+  try { sessionStorage.removeItem(HOST_STATE_KEY); sessionStorage.removeItem(GUEST_STATE_KEY); } catch { /* Optional storage. */ }
+  relay = null; savedRelay = null; room = null; state = null; role = ''; playerId = '';
+  remotePlayers.clear(); seenChat.clear();
+  ui.game.hidden = true; ui.lobby.hidden = false; ui.hostButton.disabled = false;
+  $('#resume-button').hidden = true;
+  if (ui.dialog.open) ui.dialog.close();
+  history.replaceState({}, '', location.pathname);
+  ui.status.textContent = message;
+}
 function cleanName() { return ui.name.value.trim().slice(0, 24) || 'Player'; }
 function readStoredName() { try { return localStorage.getItem('lptts-name') || ''; } catch { return ''; } }
 function saveName() { try { localStorage.setItem('lptts-name', cleanName()); } catch { /* Optional. */ } }
