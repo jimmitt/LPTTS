@@ -17,6 +17,7 @@
       <p class="lede">A tiny 2D table for sharing any TTS card deck. Your hand stays yours.</p>
       <form id="join-form">
         <label>Display name <span>optional</span><input id="name" maxlength="24" placeholder="Card shark"></label>
+        <button class="demo resume-button" type="button" id="resume-button" hidden>Resume saved table</button>
         <button class="primary" type="button" id="host-button">Host a table <b>→</b></button>
         <button class="demo" type="button" id="join-button">Join with a table code</button>
       </form>
@@ -98,6 +99,6 @@
       }
     }, 2500);
   </script>
-  <script type="module" src="./js/app.js?v=9" onerror="document.getElementById('lobby-status').textContent='The app script failed to load. Please reload the page.'"></script>
+  <script type="module" src="./js/app.js?v=10" onerror="document.getElementById('lobby-status').textContent='The app script failed to load. Please reload the page.'"></script>
 </body>
 </html>

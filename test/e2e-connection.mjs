@@ -94,6 +94,9 @@ async function runConnectionTest() {
     await guest.waitForFunction(() => document.querySelector('#hand-count')?.textContent === '1');
 
     await guest.reload();
+    await guest.waitForSelector('#lobby:not([hidden])');
+    await guest.waitForSelector('#resume-button:not([hidden])');
+    await guest.click('#resume-button');
     await guest.waitForSelector('#game:not([hidden])');
     await guest.waitForFunction(() => document.querySelector('#hand-count')?.textContent === '1');
     console.log('E2E passed: room join, private state, chat/minimize/unread, action relay, and reload resume');

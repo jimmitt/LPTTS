@@ -12,6 +12,7 @@ const ui = {
   toast: $('#toast'), dialog: $('#connect-dialog'), hostPanel: $('#connect-host'), guestPanel: $('#connect-guest')
 };
 let role = '', playerId = '', state, room, relay;
+let savedRelay;
 const remotePlayers = new Set();
 const seenChat = new Set();
 const HOST_STATE_KEY = 'lptts-host-state-v1';
@@ -20,6 +21,7 @@ const GUEST_STATE_KEY = 'lptts-guest-state-v1';
 ui.name.value = readStoredName();
 window.lpttsReady = true;
 ui.hostButton.addEventListener('click', hostTable);
+$('#resume-button').addEventListener('click', resumeSession);
 $('#join-button').addEventListener('click', openJoin);
 $('#join-room').addEventListener('click', joinTable);
 ui.connections.addEventListener('click', showInvite);
@@ -38,7 +40,8 @@ ui.shuffle.addEventListener('click', () => action('shuffle'));
 $('#chat-toggle').addEventListener('click', toggleChat);
 $('#chat-minimize').addEventListener('click', toggleChat);
 $('#chat-form').addEventListener('submit', sendChat);
-if (!restoreSession() && codeFromUrl()) openJoin();
+prepareSavedSession();
+if (codeFromUrl()) openJoin();
 
 function relayHandlers() { return { event: handleEvent, status: updateConnectionStatus }; }
 
@@ -228,9 +231,17 @@ function toggleChat() {
   if (!panel.classList.contains('minimized')) $('#chat-input').focus();
 }
 
-function restoreSession() {
-  relay = RelaySession.restore(relayHandlers());
-  if (!relay) return false;
+function prepareSavedSession() {
+  savedRelay = RelaySession.restore(relayHandlers());
+  if (!savedRelay) return;
+  const button = $('#resume-button');
+  button.textContent = `Resume table ${savedRelay.code}`;
+  button.hidden = false;
+}
+
+function resumeSession() {
+  relay = savedRelay;
+  if (!relay) return;
   try {
     role = relay.role; playerId = relay.participantId;
     if (role === 'host') {
@@ -238,8 +249,12 @@ function restoreSession() {
       for (const id of room.players.keys()) if (id !== playerId) remotePlayers.add(id);
       state = room.viewFor(playerId);
     } else state = JSON.parse(sessionStorage.getItem(GUEST_STATE_KEY) || 'null');
-    enterGame(); render(); relay.start(); return true;
-  } catch { relay.clear(); relay = null; role = ''; return false; }
+    enterGame(); render(); relay.start();
+  } catch {
+    relay.clear(); relay = null; savedRelay = null; role = '';
+    $('#resume-button').hidden = true;
+    ui.status.textContent = 'The saved table could not be resumed.';
+  }
 }
 
 function saveHostState() { try { sessionStorage.setItem(HOST_STATE_KEY, JSON.stringify(room.serialize())); } catch { /* Optional. */ } }
