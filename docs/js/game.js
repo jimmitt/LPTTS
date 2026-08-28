@@ -8,6 +8,21 @@ export class GameRoom {
     this.deck = [];
   }
 
+  static restore(data) {
+    if (!data || !Array.isArray(data.players) || !Array.isArray(data.table) || !Array.isArray(data.deck)) {
+      throw new Error('Saved table data is invalid.');
+    }
+    const room = new GameRoom(String(data.code || ''));
+    room.players = new Map(data.players.map((player) => [player.id, player]));
+    room.table = data.table;
+    room.deck = data.deck;
+    return room;
+  }
+
+  serialize() {
+    return { code: this.code, players: [...this.players.values()], table: this.table, deck: this.deck };
+  }
+
   join(id, name) {
     if (this.players.size >= 8) throw new Error('This room is full.');
     this.players.set(id, {

@@ -1,38 +1,30 @@
 import { GameRoom } from './game.js';
 import { parseTtsDeck } from './tts.js';
 import { createImageDeck } from './image-deck.js';
-import { getEffectiveTurnConfig, getStoredTurnConfig, saveStoredTurnConfig, clearStoredTurnConfig, parseTurnJson, buildRtcConfig, testTurnConnectivity } from './config.js';
+import { RelaySession } from './relay.js';
 
 const $ = (selector) => document.querySelector(selector);
-const ui = { lobby:$('#lobby'), game:$('#game'), form:$('#join-form'), hostButton:$('#host-button'), name:$('#name'), status:$('#lobby-status'), players:$('#players'), playerCount:$('#player-count'), connections:$('#connections'), connection:$('#connection'), tableCards:$('#table-cards'), empty:$('#empty-table'), deck:$('#deck'), deckCount:$('.deck-count'), deckLabel:$('#deck-label'), shuffle:$('#shuffle'), hand:$('#hand'), handCount:$('#hand-count'), file:$('#tts-file'), toast:$('#toast'), dialog:$('#connect-dialog'), hostPanel:$('#connect-host'), guestPanel:$('#connect-guest'), connectStatus:$('#connect-status') };
-let role = '', playerId = '', state, room, hostPending, guestPeer, guestChannel;
-const peers = new Map();
-const receivedAssets = new Map();
-const assetParts = new Map();
+const ui = {
+  lobby: $('#lobby'), game: $('#game'), hostButton: $('#host-button'), name: $('#name'), status: $('#lobby-status'),
+  players: $('#players'), playerCount: $('#player-count'), connections: $('#connections'), connection: $('#connection'),
+  tableCards: $('#table-cards'), empty: $('#empty-table'), deck: $('#deck'), deckCount: $('.deck-count'),
+  deckLabel: $('#deck-label'), shuffle: $('#shuffle'), hand: $('#hand'), handCount: $('#hand-count'), file: $('#tts-file'),
+  toast: $('#toast'), dialog: $('#connect-dialog'), hostPanel: $('#connect-host'), guestPanel: $('#connect-guest')
+};
+let role = '', playerId = '', state, room, relay;
+const remotePlayers = new Set();
+const seenChat = new Set();
+const HOST_STATE_KEY = 'lptts-host-state-v1';
+const GUEST_STATE_KEY = 'lptts-guest-state-v1';
 
 ui.name.value = readStoredName();
 window.lpttsReady = true;
-ui.form.addEventListener('submit', (event) => { event.preventDefault(); hostTable(); });
 ui.hostButton.addEventListener('click', hostTable);
-$('#join-button').addEventListener('click', () => openJoin());
-$('#lobby-settings')?.addEventListener('click', openSettings);
-$('#game-settings')?.addEventListener('click', openSettings);
-$('#settings-form')?.addEventListener('submit', saveSettings);
-$('#setting-test-button')?.addEventListener('click', testSettings);
-$('#setting-clear-button')?.addEventListener('click', clearSettings);
-$('#turn-file-button')?.addEventListener('click', () => $('#turn-file-input').click());
-$('#turn-file-input')?.addEventListener('change', loadTurnFile);
-ui.connections.addEventListener('click', () => role === 'host' ? createOffer() : toast('Only the host can add players'));
-$('#copy-offer')?.addEventListener('click', () => copy($('#offer-code').value, 'Offer code copied'));
-$('#copy-answer')?.addEventListener('click', () => copy($('#guest-answer').value, 'Answer code copied'));
-$('#copy-offer-input')?.addEventListener('click', () => copy($('#join-offer').value, 'Offer code copied'));
-$('#copy-answer-input')?.addEventListener('click', () => copy($('#answer-code').value, 'Answer code copied'));
-$('#paste-offer')?.addEventListener('click', () => pasteInto($('#join-offer'), 'Offer code pasted'));
-$('#paste-answer')?.addEventListener('click', () => pasteInto($('#answer-code'), 'Answer code pasted'));
-$('#offer-code')?.addEventListener('click', () => { if ($('#offer-code').value) copy($('#offer-code').value, 'Offer code copied'); });
-$('#guest-answer')?.addEventListener('click', () => { if ($('#guest-answer').value) copy($('#guest-answer').value, 'Answer code copied'); });
-$('#make-answer').addEventListener('click', makeAnswer);
-$('#accept-answer').addEventListener('click', acceptAnswer);
+$('#join-button').addEventListener('click', openJoin);
+$('#join-room').addEventListener('click', joinTable);
+ui.connections.addEventListener('click', showInvite);
+$('#copy-room-code').addEventListener('click', () => copy($('#room-code').value, 'Table code copied'));
+$('#copy-room-link').addEventListener('click', () => copy($('#room-link').value, 'Invite link copied'));
 document.querySelectorAll('[data-close]').forEach((button) => button.addEventListener('click', () => $(`#${button.dataset.close}`).close()));
 $('#help').addEventListener('click', () => $('#help-dialog').showModal());
 $('#import-button').addEventListener('click', () => role === 'host' ? ui.file.click() : toast('Only the host can import a deck', true));
@@ -43,758 +35,227 @@ $('#back-file').addEventListener('change', updateImageSummary);
 ui.file.addEventListener('change', importDeck);
 ui.deck.addEventListener('click', () => action('draw'));
 ui.shuffle.addEventListener('click', () => action('shuffle'));
+$('#chat-toggle').addEventListener('click', toggleChat);
+$('#chat-minimize').addEventListener('click', toggleChat);
+$('#chat-form').addEventListener('submit', sendChat);
+if (!restoreSession() && codeFromUrl()) openJoin();
 
-function openSettings() {
-  const current = getEffectiveTurnConfig();
-  let host = current?.host || '', username = current?.username || '', credential = current?.credential || '';
-  if (Array.isArray(current?.iceServers)) {
-    const turn = current.iceServers.find(s => s.username && s.credential);
-    if (turn) {
-      username = turn.username;
-      credential = turn.credential;
-      const url = Array.isArray(turn.urls) ? turn.urls[0] : turn.urls;
-      host = url.replace(/^turn(s)?:/i, '').replace(/^stun:/i, '').split(':')[0].split('?')[0];
-    }
-  }
-  $('#setting-turn-host').value = host;
-  $('#setting-turn-user').value = username;
-  $('#setting-turn-cred').value = credential;
-  $('#settings-status').textContent = '';
-  
-  const sourceEl = $('#settings-source');
-  if (sourceEl) {
-    if (current?.source === 'file') {
-      sourceEl.textContent = '✓ Active: Loaded automatically from docs/js/config.js';
-    } else if (current?.source === 'localStorage') {
-      sourceEl.textContent = '✓ Active: Loaded from browser local storage';
-    } else {
-      sourceEl.textContent = 'Active: Using direct P2P (STUN)';
-    }
-  }
-  $('#settings-dialog').showModal();
-}
+function relayHandlers() { return { event: handleEvent, status: updateConnectionStatus }; }
 
-async function testSettings() {
-  const statusEl = $('#settings-status');
-  statusEl.textContent = 'Testing connectivity… (querying STUN & TURN relay)';
-  try {
-    const host = $('#setting-turn-host').value.trim();
-    const username = $('#setting-turn-user').value.trim();
-    const credential = $('#setting-turn-cred').value.trim();
-    const current = (host && username && credential)
-      ? { host, username, credential }
-      : getEffectiveTurnConfig();
-
-    const summary = await testTurnConnectivity(current);
-    if (summary.relayFound) {
-      statusEl.textContent = `✓ Relay active (${summary.relayIp}) | ✓ STUN OK (${summary.publicIp || 'reachable'})`;
-      toast('TURN Relay is working!');
-    } else if (summary.stunFound) {
-      statusEl.textContent = `✓ STUN OK (${summary.publicIp}) | ✗ No TURN relay candidates. Check credentials.`;
-      toast('STUN reachable, but TURN relay failed', true);
-    } else {
-      statusEl.textContent = `✗ Connection check failed: ${summary.error || 'Network error'}`;
-      toast('Relay test failed', true);
-    }
-  } catch (err) {
-    statusEl.textContent = `Error: ${err.message}`;
-  }
-}
-
-function saveSettings(event) {
-  event.preventDefault();
-  try {
-    saveStoredTurnConfig({
-      host: $('#setting-turn-host').value,
-      username: $('#setting-turn-user').value,
-      credential: $('#setting-turn-cred').value
-    });
-    $('#settings-dialog').close();
-    toast('Relay settings saved');
-  } catch (error) {
-    $('#settings-status').textContent = error.message;
-  }
-}
-
-async function loadTurnFile() {
-  const fileInput = $('#turn-file-input');
-  const file = fileInput?.files?.[0];
-  if (!file) return;
-  try {
-    const text = await file.text();
-    const config = parseTurnJson(text);
-    let host = config.host || '', username = config.username || '', credential = config.credential || '';
-    if (Array.isArray(config.iceServers)) {
-      const turn = config.iceServers.find(s => s.username && s.credential);
-      if (turn) {
-        username = turn.username;
-        credential = turn.credential;
-        const url = Array.isArray(turn.urls) ? turn.urls[0] : turn.urls;
-        host = url.replace(/^turn(s)?:/i, '').replace(/^stun:/i, '').split(':')[0].split('?')[0];
-      }
-    }
-    $('#setting-turn-host').value = host;
-    $('#setting-turn-user').value = username;
-    $('#setting-turn-cred').value = credential;
-    saveStoredTurnConfig(config);
-    $('#settings-status').textContent = '';
-    const sourceEl = $('#settings-source');
-    if (sourceEl) sourceEl.textContent = `✓ Loaded from ${file.name}`;
-    toast(`Loaded TURN settings from ${file.name}`);
-  } catch (error) {
-    $('#settings-status').textContent = `Could not load file: ${error.message}`;
-  } finally {
-    fileInput.value = '';
-  }
-}
-
-function clearSettings() {
-  clearStoredTurnConfig();
-  $('#setting-turn-host').value = '';
-  $('#setting-turn-user').value = '';
-  $('#setting-turn-cred').value = '';
-  $('#settings-status').textContent = '';
-  const sourceEl = $('#settings-source');
-  if (sourceEl) sourceEl.textContent = 'Active: Using direct P2P (STUN)';
-  $('#settings-dialog').close();
-  toast('Relay settings cleared');
-}
-
-function hostTable() {
+async function hostTable() {
   ui.status.textContent = 'Opening table…';
   ui.hostButton.disabled = true;
   try {
-    saveName(); role = 'host'; playerId = newId();
-    room = new GameRoom(randomCode()); room.join(playerId, ui.name.value); updateHost(); enterGame();
+    saveName();
+    relay = await RelaySession.create(cleanName(), relayHandlers());
+    role = 'host'; playerId = relay.participantId;
+    room = new GameRoom(relay.code); room.join(playerId, cleanName());
+    enterGame(); updateHost(); relay.start(); showInvite();
   } catch (error) {
-    role = ''; ui.hostButton.disabled = false; ui.status.textContent = `Could not open the table: ${error.message || 'unsupported browser feature'}`;
-    console.error('LPTTS host startup failed', error);
-  }
-}
-
-let logEntries = [];
-
-function logConnect(message) {
-  const time = new Date().toTimeString().slice(0, 8);
-  logEntries.push(`[${time}] ${message}`);
-  const logEl = $('#connect-log');
-  const countEl = $('#log-count');
-  if (logEl) {
-    logEl.textContent = logEntries.join('\n');
-    logEl.scrollTop = logEl.scrollHeight;
-  }
-  if (countEl) countEl.textContent = logEntries.length;
-  console.log(`[LPTTS Connect] ${message}`);
-}
-
-function clearConnectLog() {
-  logEntries = [];
-  const logEl = $('#connect-log');
-  const countEl = $('#log-count');
-  if (logEl) logEl.textContent = '';
-  if (countEl) countEl.textContent = '0';
-}
-
-function updateStatus(headline, desc, state = 'busy') {
-  const box = $('#connect-status-box');
-  const headEl = $('#status-headline');
-  const descEl = $('#connect-status');
-  if (box) {
-    box.className = `connect-status-box ${state}`;
-  }
-  if (headEl) headEl.textContent = headline;
-  if (descEl) descEl.textContent = desc;
-}
-
-function updateBadges({ stun, turn }) {
-  if (stun !== undefined) {
-    const dot = $('#dot-stun');
-    const txt = $('#text-stun');
-    if (dot && txt) {
-      dot.className = `badge-dot ${stun.status}`;
-      txt.textContent = stun.text;
-    }
-  }
-  if (turn !== undefined) {
-    const dot = $('#dot-turn');
-    const txt = $('#text-turn');
-    if (dot && txt) {
-      dot.className = `badge-dot ${turn.status}`;
-      txt.textContent = turn.text;
-    }
+    ui.status.textContent = `Could not open the table: ${error.message}`;
+    ui.hostButton.disabled = false;
   }
 }
 
 function openJoin() {
-  saveName();
-  role = 'guest';
-  resetDialog(false);
-  clearConnectLog();
-  const turnConfig = getEffectiveTurnConfig();
-  updateBadges({
-    stun: { status: '', text: 'Waiting for offer' },
-    turn: turnConfig ? { status: '', text: 'Configured locally' } : { status: '', text: 'From host' }
-  });
-  updateStatus('Ready to join table', 'Paste the connection code you received from the host.', '');
+  saveName(); ui.hostPanel.hidden = true; ui.guestPanel.hidden = false;
+  $('#connect-title').textContent = 'Join a table';
+  $('#join-code').value = codeFromUrl();
+  $('#connect-status').textContent = 'Enter the six-character table code from the host.';
   ui.dialog.showModal();
 }
 
-function collectIce(peer, onCandidate) {
-  const gathered = [];
-  let completeResolve = null;
-
-  peer.addEventListener('icecandidate', (e) => {
-    if (e.candidate) {
-      gathered.push(e.candidate);
-      if (onCandidate) onCandidate(e.candidate);
-    } else {
-      if (completeResolve) completeResolve();
-    }
-  });
-
-  peer.addEventListener('icegatheringstatechange', () => {
-    if (peer.iceGatheringState === 'complete') {
-      if (completeResolve) completeResolve();
-    }
-  });
-
-  return {
-    gathered,
-    waitComplete: (timeoutMs = 6000) => {
-      if (peer.iceGatheringState === 'complete') return Promise.resolve(gathered);
-      return new Promise((resolve) => {
-        const timer = setTimeout(() => resolve(gathered), timeoutMs);
-        completeResolve = () => {
-          clearTimeout(timer);
-          resolve(gathered);
-        };
-      });
-    }
-  };
-}
-
-async function createOffer() {
+async function joinTable() {
+  const button = $('#join-room'); button.disabled = true;
+  $('#connect-status').textContent = 'Joining table…';
   try {
-    if (peers.size >= 7) return toast('This table is full', true);
-    resetDialog(true);
-    hostPending?.peer.close();
-    clearConnectLog();
-    $('#offer-code').value = '';
-    ui.dialog.showModal();
+    saveName();
+    relay = await RelaySession.join($('#join-code').value, cleanName(), relayHandlers());
+    role = 'guest'; playerId = relay.participantId; state = undefined;
+    ui.dialog.close(); enterGame(); relay.start();
+  } catch (error) { $('#connect-status').textContent = error.message; }
+  finally { button.disabled = false; }
+}
 
-    const turnConfig = getEffectiveTurnConfig();
-    updateBadges({
-      stun: { status: 'busy', text: 'Searching…' },
-      turn: turnConfig ? { status: 'busy', text: 'Allocating…' } : { status: 'warn', text: 'Off (Direct only)' }
-    });
-    updateStatus('Gathering network routes…', 'Querying STUN and TURN relay servers to build offer code…', 'busy');
-    logConnect(`Initializing host offer. TURN source: ${turnConfig?.source || 'none'}`);
+function showInvite() {
+  if (role !== 'host') return toast(`Table code: ${relay?.code || state?.code || ''}`);
+  ui.hostPanel.hidden = false; ui.guestPanel.hidden = true;
+  $('#connect-title').textContent = 'Invite players';
+  $('#room-code').value = relay.code;
+  $('#room-link').value = `${location.origin}${location.pathname}?room=${relay.code}`;
+  $('#connect-status').textContent = 'Share the table code or link. Up to seven players can join.';
+  if (!ui.dialog.open) ui.dialog.showModal();
+}
 
-    const peer = new RTCPeerConnection(buildRtcConfig(turnConfig));
-    const channel = peer.createDataChannel('lptts', { ordered: true });
-    const id = newId();
-    hostPending = { peer, channel, id };
-    wireHostPeer(hostPending);
-
-    let stunFound = false, relayFound = false;
-    const ice = collectIce(peer, (c) => {
-      logConnect(`Gathered ${c.type} route: ${c.address || 'peer'}:${c.port} (${c.protocol})`);
-      if (c.type === 'srflx') {
-        stunFound = true;
-        updateBadges({ stun: { status: 'ok', text: c.address } });
-      }
-      if (c.type === 'relay') {
-        relayFound = true;
-        updateBadges({ turn: { status: 'ok', text: `${c.address}:${c.port}` } });
-      }
-    });
-
-    await peer.setLocalDescription(await peer.createOffer());
-    await ice.waitComplete(6000);
-
-    if (!stunFound) updateBadges({ stun: { status: 'warn', text: 'No public STUN' } });
-    if (turnConfig && !relayFound) updateBadges({ turn: { status: 'err', text: 'Relay failed' } });
-
-    const offerCode = await encode({ v: 1, type: 'offer', id, sdp: peer.localDescription, candidates: ice.gathered, turn: turnConfig });
-    $('#offer-code').value = offerCode;
-    updateStatus('Offer code ready', `Code created with ${ice.gathered.length} route(s). Copy and send it to player 2.`, 'success');
-    logConnect(`Offer code generated (${offerCode.length} chars). Awaiting player answer.`);
-  } catch (error) {
-    updateStatus('Failed to create offer', error.message, 'error');
-    logConnect(`Error creating offer: ${error.message}`);
-    toast(`Could not create an offer: ${error.message}`, true);
+async function handleEvent(event) {
+  const data = event.data || {};
+  if (event.type === 'chat') { addChat({ ...data, eventId: event.id }); return; }
+  if (role === 'host') {
+    if (event.type === 'join') {
+      if (!room.players.has(data.id)) room.join(data.id, data.name);
+      remotePlayers.add(data.id); updateHost();
+      if (ui.dialog.open && !ui.hostPanel.hidden) ui.dialog.close();
+      toast(`${data.name} joined`);
+    } else if (event.type === 'action') applyHostAction(event.sender, data.action, data.body || {});
+    else if (event.type === 'leave') { room.leave(event.sender); remotePlayers.delete(event.sender); updateHost(); }
+    return;
   }
+  if (event.type === 'welcome') playerId = data.playerId || playerId;
+  if (event.type === 'state') { state = data.state; saveGuestState(); render(); }
+  if (event.type === 'error') toast(data.message || 'The host rejected that action.', true);
 }
 
-async function makeAnswer() {
-  try {
-    clearConnectLog();
-    updateStatus('Parsing offer…', 'Reading host offer code and contact details…', 'busy');
-    logConnect('Guest decoding host offer code…');
-
-    const offer = await decode($('#join-offer').value, 'offer');
-    logConnect(`Host offer parsed. Session ID: ${offer.id}, TURN: ${offer.turn ? 'Provided by host' : 'None'}`);
-
-    const turnConfig = offer.turn || getEffectiveTurnConfig();
-    updateBadges({
-      stun: { status: 'busy', text: 'Searching…' },
-      turn: turnConfig ? { status: 'busy', text: 'Allocating…' } : { status: 'warn', text: 'Off (Direct only)' }
-    });
-
-    guestPeer?.close();
-    guestPeer = new RTCPeerConnection(buildRtcConfig(turnConfig));
-    guestPeer.addEventListener('datachannel', ({ channel }) => {
-      guestChannel = channel;
-      logConnect('DataChannel received from host');
-      wireGuestChannel(channel);
-    });
-    guestPeer.addEventListener('iceconnectionstatechange', () => {
-      logConnect(`Guest ICE connection state -> ${guestPeer.iceConnectionState}`);
-      if (guestPeer.iceConnectionState === 'checking') updateStatus('Checking routes…', 'Testing direct and relay connection pathways…', 'busy');
-      if (guestPeer.iceConnectionState === 'connected' || guestPeer.iceConnectionState === 'completed') updateStatus('Connected!', 'Joining game table…', 'success');
-      if (guestPeer.iceConnectionState === 'failed') updateStatus('Connection failed', 'Neither direct nor relay route connected. Verify TURN relay settings.', 'error');
-    });
-    guestPeer.addEventListener('connectionstatechange', () => {
-      logConnect(`Guest peer connection state -> ${guestPeer.connectionState}`);
-      connectionLabel(guestPeer.connectionState);
-    });
-
-    let stunFound = false, relayFound = false;
-    const ice = collectIce(guestPeer, (c) => {
-      logConnect(`Gathered ${c.type} route: ${c.address || 'peer'}:${c.port} (${c.protocol})`);
-      if (c.type === 'srflx') {
-        stunFound = true;
-        updateBadges({ stun: { status: 'ok', text: c.address } });
-      }
-      if (c.type === 'relay') {
-        relayFound = true;
-        updateBadges({ turn: { status: 'ok', text: `${c.address}:${c.port}` } });
-      }
-    });
-
-    await guestPeer.setRemoteDescription(offer.sdp);
-    await guestPeer.setLocalDescription(await guestPeer.createAnswer());
-    await ice.waitComplete(6000);
-
-    if (!stunFound) updateBadges({ stun: { status: 'warn', text: 'No public STUN' } });
-    if (turnConfig && !relayFound) updateBadges({ turn: { status: 'err', text: 'Relay failed' } });
-
-    const answerCode = await encode({ v: 1, type: 'answer', id: offer.id, name: cleanName(), sdp: guestPeer.localDescription, candidates: ice.gathered });
-    $('#guest-answer').value = answerCode;
-    $('#answer-result').hidden = false;
-    updateStatus('Answer code ready', `Answer code generated with ${ice.gathered.length} route(s). Send it back to the host.`, 'success');
-    logConnect(`Answer code generated (${answerCode.length} chars). Send back to host.`);
-  } catch (error) {
-    updateStatus('Could not create answer', error.message, 'error');
-    logConnect(`Error: ${error.message}`);
-  }
+function updateConnectionStatus(status, error) {
+  if (ui.game.hidden) return;
+  if (status === 'connected') ui.connection.textContent = role === 'host' ? 'Relay online · hosting' : 'Relay online';
+  if (status === 'reconnecting') ui.connection.textContent = 'Reconnecting…';
+  if (status === 'expired') { ui.connection.textContent = 'Table expired'; toast(error?.message || 'This table expired.', true); }
 }
 
-async function acceptAnswer() {
-  try {
-    updateStatus('Validating answer code…', 'Reading player answer and network routes…', 'busy');
-    const answer = await decode($('#answer-code').value, 'answer');
-    if (!hostPending || answer.id !== hostPending.id) throw new Error('This answer does not match the current offer.');
-
-    hostPending.name = String(answer.name || 'Player').slice(0, 24);
-    logConnect(`Accepted answer from "${hostPending.name}". Setting remote description…`);
-    await hostPending.peer.setRemoteDescription(answer.sdp);
-    updateStatus('Connecting to peer…', 'Testing direct and relay routes. Keep this window open…', 'busy');
-  } catch (error) {
-    updateStatus('Answer code error', error.message, 'error');
-    logConnect(`Error accepting answer: ${error.message}`);
-  }
-}
-
-function wireHostPeer(entry) {
-  entry.channel.addEventListener('open', () => {
-    try {
-      logConnect(`DataChannel open with player "${entry.name}"!`);
-      room.join(entry.id, entry.name);
-      peers.set(entry.id, entry);
-      hostPending = undefined;
-      ui.dialog.close();
-      updateHost();
-      toast(`${entry.name} joined`);
-    } catch (error) {
-      sendChannel(entry.channel, { type: 'error', message: error.message });
-      entry.peer.close();
-    }
-  });
-  entry.peer.addEventListener('iceconnectionstatechange', () => {
-    logConnect(`Host ICE connection state -> ${entry.peer.iceConnectionState}`);
-    if (entry.peer.iceConnectionState === 'checking') updateStatus('Connecting…', 'Testing candidate routes with peer…', 'busy');
-    if (entry.peer.iceConnectionState === 'connected' || entry.peer.iceConnectionState === 'completed') updateStatus('Connected!', 'Peer handshake successful. Joining room…', 'success');
-    if (entry.peer.iceConnectionState === 'failed') updateStatus('Connection failed', 'Neither direct nor relay route connected. Verify TURN relay settings.', 'error');
-  });
-  entry.channel.addEventListener('message', ({ data }) => {
-    try {
-      const message = JSON.parse(data);
-      if (message.type === 'action') applyHostAction(entry.id, message.action, message.body || {});
-    } catch {
-      sendChannel(entry.channel, { type: 'error', message: 'Invalid action.' });
-    }
-  });
-  entry.peer.addEventListener('connectionstatechange', () => {
-    logConnect(`Host peer connection state -> ${entry.peer.connectionState}`);
-    if (['failed', 'closed', 'disconnected'].includes(entry.peer.connectionState) && peers.has(entry.id)) {
-      room.leave(entry.id);
-      peers.delete(entry.id);
-      updateHost();
-    }
-  });
-}
-
-function wireGuestChannel(channel) {
-  channel.addEventListener('open', () => { ui.dialog.close(); enterGame(); ui.connection.textContent='Connected to host'; });
-  channel.addEventListener('message', ({data}) => { const message=JSON.parse(data); if(message.type==='welcome')playerId=message.playerId; if(message.type==='asset-begin')assetParts.set(message.id,[]); if(message.type==='asset-chunk')assetParts.get(message.id)?.push(message.data); if(message.type==='asset-end'){receivedAssets.set(message.id,(assetParts.get(message.id)||[]).join(''));assetParts.delete(message.id);} if(message.type==='state'){state=restoreAssets(message.state);render();} if(message.type==='error')toast(message.message,true); });
-  channel.addEventListener('close', () => { ui.connection.textContent='Host disconnected'; toast('The host ended the connection',true); });
-}
-
-function action(type, body={}) {
-  if (role === 'host') applyHostAction(playerId,type,body);
-  else if (guestChannel?.readyState === 'open') sendChannel(guestChannel,{type:'action',action:type,body});
-  else toast('Not connected to the host',true);
+function action(type, body = {}) {
+  if (role === 'host') applyHostAction(playerId, type, body);
+  else if (relay) relay.send({ type: 'action', target: 'host', data: { action: type, body } }).catch(networkError);
+  else toast('Not connected to the host', true);
 }
 
 function applyHostAction(actor, type, body) {
   try {
-    if(type==='draw') room.draw(actor); else if(type==='shuffle') room.shuffle(); else if(type==='play') room.play(actor,body.cardId,body.x,body.y);
-    else if(type==='take') room.take(actor,body.cardId); else if(type==='flip') room.flip(body.cardId); else if(type==='move') room.move(actor,body.cardId,body.x,body.y); else throw new Error('Unknown action.');
+    if (type === 'draw') room.draw(actor);
+    else if (type === 'shuffle') room.shuffle();
+    else if (type === 'play') room.play(actor, body.cardId, body.x, body.y);
+    else if (type === 'take') room.take(actor, body.cardId);
+    else if (type === 'flip') room.flip(body.cardId);
+    else if (type === 'move') room.move(actor, body.cardId, body.x, body.y);
+    else throw new Error('Unknown action.');
     updateHost();
-  } catch(error) { if(actor===playerId)toast(error.message,true); else sendChannel(peers.get(actor)?.channel,{type:'error',message:error.message}); }
+  } catch (error) {
+    if (actor === playerId) toast(error.message, true);
+    else relay.send({ type: 'error', target: actor, data: { message: error.message } }).catch(networkError);
+  }
 }
 
 function updateHost() {
-  state=room.viewFor(playerId); render();
-  for(const [id,entry] of peers){sendChannel(entry.channel,{type:'welcome',playerId:id});queueSnapshot(entry,room.viewFor(id));}
+  state = room.viewFor(playerId); render(); saveHostState();
+  for (const id of remotePlayers) {
+    if (!room.players.has(id)) continue;
+    relay.send([
+      { type: 'welcome', target: id, data: { playerId: id } },
+      { type: 'state', target: id, data: { state: room.viewFor(id) } }
+    ]).catch(networkError);
+  }
 }
 
 async function importDeck() {
-  try { const cards=parseTtsDeck(await ui.file.files[0].text());room.importDeck(cards);updateHost();toast(`Imported ${cards.length} cards`); }
-  catch(error){toast(error.message,true);} finally{ui.file.value='';}
+  try { const cards = parseTtsDeck(await ui.file.files[0].text()); room.importDeck(cards); updateHost(); toast(`Imported ${cards.length} cards`); }
+  catch (error) { toast(error.message, true); }
+  finally { ui.file.value = ''; }
 }
 
 async function createUploadedDeck(event) {
   event.preventDefault();
-  const status = $('#image-deck-status'); status.textContent = 'Reading images…';
+  const status = $('#image-deck-status'); status.textContent = 'Preparing images…';
   try {
-    const faceFile=$('#face-file').files[0], backFile=$('#back-file').files[0];
-    if(!faceFile||!backFile)throw new Error('Choose both front and back images.');
-    if(faceFile.size>12*1024*1024||backFile.size>12*1024*1024)throw new Error('Each image must be 12 MB or smaller.');
-    const [face,back]=await Promise.all([readDataUrl(faceFile),readDataUrl(backFile)]);
-    const cards=createImageDeck({name:$('#deck-name').value,face,back,columns:$('#deck-columns').value,rows:$('#deck-rows').value,count:$('#deck-card-count').value});
-    room.importDeck(cards);updateHost();$('#image-deck-dialog').close();status.textContent='';toast(`Created ${cards.length} cards`);
-  } catch(error){status.textContent=error.message;}
+    const faceFile = $('#face-file').files[0], backFile = $('#back-file').files[0];
+    if (!faceFile || !backFile) throw new Error('Choose both front and back images.');
+    if (faceFile.size > 12 * 1024 * 1024 || backFile.size > 12 * 1024 * 1024) throw new Error('Each image must be 12 MB or smaller.');
+    const upload = async (file, label) => {
+      const result = await relay.upload(file, (progress) => { status.textContent = `Uploading ${label}… ${Math.round(progress * 100)}%`; });
+      return result.url;
+    };
+    const face = await upload(faceFile, 'card faces');
+    const back = await upload(backFile, 'card back');
+    const cards = createImageDeck({ name: $('#deck-name').value, face, back, columns: $('#deck-columns').value, rows: $('#deck-rows').value, count: $('#deck-card-count').value });
+    room.importDeck(cards); updateHost(); $('#image-deck-dialog').close(); status.textContent = ''; toast(`Created ${cards.length} cards`);
+  } catch (error) { status.textContent = error.message; }
 }
 
 async function updateImageSummary() {
-  const face=$('#face-file').files[0],back=$('#back-file').files[0],parts=[];
-  if(face){const size=await imageDimensions(face);parts.push(`Front: ${size.width}×${size.height}px · ${fileSize(face.size)}`);}
-  if(back){const size=await imageDimensions(back);parts.push(`Back: ${size.width}×${size.height}px · ${fileSize(back.size)}`);}
-  $('#image-summary').textContent=parts.join(' | ')||'Choose the front and back images.';
+  const face = $('#face-file').files[0], back = $('#back-file').files[0], parts = [];
+  if (face) { const size = await imageDimensions(face); parts.push(`Front: ${size.width}×${size.height}px · ${fileSize(face.size)}`); }
+  if (back) { const size = await imageDimensions(back); parts.push(`Back: ${size.width}×${size.height}px · ${fileSize(back.size)}`); }
+  $('#image-summary').textContent = parts.join(' | ') || 'Choose the front and back images.';
 }
 
 function render() {
-  if(!state)return; ui.connections.textContent=role==='host'?`${state.code} · + PLAYER`:state.code; ui.playerCount.textContent=state.players.length;
-  ui.players.replaceChildren(...state.players.map(player=>{const row=document.createElement('div');row.className='player-row';const backs=Array.from({length:Math.min(player.handCount,5)},()=>'<i></i>').join('');row.innerHTML=`<span class="avatar" style="background:${player.color}">${escapeHtml(initials(player.name))}</span><span class="player-name">${escapeHtml(player.name)}${player.id===playerId?' (you)':''}</span><span class="player-cards">${backs}<small>${player.handCount}</small></span>`;return row;}));
-  const me=state.players.find(p=>p.id===playerId);ui.handCount.textContent=me?.handCount||0;ui.hand.replaceChildren(...(me?.hand||[]).map(handCard));
-  ui.deckCount.textContent=state.deckCount;ui.deckLabel.textContent=state.deckCount?`${state.deckCount} cards`:'No deck';ui.deck.disabled=!state.deckCount;ui.shuffle.disabled=!state.deckCount;
-  ui.deck.style.backgroundImage=state.deckBack?`url("${cssUrl(state.deckBack)}")`:'';ui.tableCards.replaceChildren(...state.table.map(tableCard));ui.empty.hidden=state.table.length>0;
+  if (!state) return;
+  ui.connections.textContent = role === 'host' ? `${state.code} · + PLAYER` : state.code;
+  ui.playerCount.textContent = state.players.length;
+  ui.players.replaceChildren(...state.players.map((player) => {
+    const row = document.createElement('div'); row.className = 'player-row';
+    const backs = Array.from({ length: Math.min(player.handCount, 5) }, () => '<i></i>').join('');
+    row.innerHTML = `<span class="avatar" style="background:${player.color}">${escapeHtml(initials(player.name))}</span><span class="player-name">${escapeHtml(player.name)}${player.id === playerId ? ' (you)' : ''}</span><span class="player-cards">${backs}<small>${player.handCount}</small></span>`;
+    return row;
+  }));
+  const me = state.players.find((player) => player.id === playerId);
+  ui.handCount.textContent = me?.handCount || 0;
+  ui.hand.replaceChildren(...(me?.hand || []).map(handCard));
+  ui.deckCount.textContent = state.deckCount;
+  ui.deckLabel.textContent = state.deckCount ? `${state.deckCount} cards` : 'No deck';
+  ui.deck.disabled = !state.deckCount; ui.shuffle.disabled = !state.deckCount;
+  ui.deck.style.backgroundImage = state.deckBack ? `url("${cssUrl(state.deckBack)}")` : '';
+  ui.tableCards.replaceChildren(...state.table.map(tableCard)); ui.empty.hidden = state.table.length > 0;
 }
 
-function handCard(card){const el=cardElement(card,true);el.title='Double-click to play';el.addEventListener('dblclick',()=>action('play',{cardId:card.id,x:45+Math.random()*10,y:42+Math.random()*8}));return el;}
-function tableCard(card,index){const el=cardElement(card,card.faceUp);el.classList.add('table-card');el.style.left=`${card.x}%`;el.style.top=`${card.y}%`;el.style.zIndex=index+1;el.style.transform=`translate(-50%,-50%) rotate(${card.rotation||0}deg)`;el.addEventListener('dblclick',()=>action('flip',{cardId:card.id}));el.addEventListener('contextmenu',(e)=>{e.preventDefault();action('take',{cardId:card.id});});el.addEventListener('pointerdown',(event)=>drag(event,el,card));return el;}
-function drag(event,el,card){event.preventDefault();el.setPointerCapture(event.pointerId);const table=$('#table');const move=(e)=>{const box=table.getBoundingClientRect();const x=Math.max(3,Math.min(97,(e.clientX-box.left)/box.width*100));const y=Math.max(3,Math.min(97,(e.clientY-box.top)/box.height*100));el.style.left=`${x}%`;el.style.top=`${y}%`;el.dataset.x=x;el.dataset.y=y;};const up=()=>{el.removeEventListener('pointermove',move);action('move',{cardId:card.id,x:Number(el.dataset.x)||card.x,y:Number(el.dataset.y)||card.y});};el.addEventListener('pointermove',move);el.addEventListener('pointerup',up,{once:true});}
-function cardElement(card,faceUp){const el=document.createElement('div');el.className='card';if(faceUp&&card.face){const face=document.createElement('div');face.className='card-face';const {index=0,width=1,height=1}=card.sheet||{};face.style.backgroundImage=`url("${cssUrl(card.face)}")`;face.style.backgroundSize=`${width*100}% ${height*100}%`;face.style.backgroundPosition=`${width>1?(index%width)/(width-1)*100:0}% ${height>1?Math.floor(index/width)/(height-1)*100:0}%`;el.append(face);}else{const back=document.createElement('div');back.className='card-back';if(card.back){back.style.backgroundImage=`url("${cssUrl(card.back)}")`;back.style.backgroundSize='cover';back.textContent='';}else back.textContent='LPTTS';el.append(back);}if(faceUp){const name=document.createElement('span');name.className='card-name';name.textContent=card.name;el.append(name);}return el;}
+function handCard(card) { const el = cardElement(card, true); el.title = 'Double-click to play'; el.addEventListener('dblclick', () => action('play', { cardId: card.id, x: 45 + Math.random() * 10, y: 42 + Math.random() * 8 })); return el; }
+function tableCard(card, index) { const el = cardElement(card, card.faceUp); el.classList.add('table-card'); el.style.left = `${card.x}%`; el.style.top = `${card.y}%`; el.style.zIndex = index + 1; el.style.transform = `translate(-50%,-50%) rotate(${card.rotation || 0}deg)`; el.addEventListener('dblclick', () => action('flip', { cardId: card.id })); el.addEventListener('contextmenu', (event) => { event.preventDefault(); action('take', { cardId: card.id }); }); el.addEventListener('pointerdown', (event) => drag(event, el, card)); return el; }
+function drag(event, el, card) { event.preventDefault(); el.setPointerCapture(event.pointerId); const table = $('#table'); const move = (e) => { const box = table.getBoundingClientRect(); const x = Math.max(3, Math.min(97, (e.clientX - box.left) / box.width * 100)); const y = Math.max(3, Math.min(97, (e.clientY - box.top) / box.height * 100)); el.style.left = `${x}%`; el.style.top = `${y}%`; el.dataset.x = x; el.dataset.y = y; }; const up = () => { el.removeEventListener('pointermove', move); action('move', { cardId: card.id, x: Number(el.dataset.x) || card.x, y: Number(el.dataset.y) || card.y }); }; el.addEventListener('pointermove', move); el.addEventListener('pointerup', up, { once: true }); }
+function cardElement(card, faceUp) { const el = document.createElement('div'); el.className = 'card'; if (faceUp && card.face) { const face = document.createElement('div'); face.className = 'card-face'; const { index = 0, width = 1, height = 1 } = card.sheet || {}; face.style.backgroundImage = `url("${cssUrl(card.face)}")`; face.style.backgroundSize = `${width * 100}% ${height * 100}%`; face.style.backgroundPosition = `${width > 1 ? (index % width) / (width - 1) * 100 : 0}% ${height > 1 ? Math.floor(index / width) / (height - 1) * 100 : 0}%`; el.append(face); } else { const back = document.createElement('div'); back.className = 'card-back'; if (card.back) { back.style.backgroundImage = `url("${cssUrl(card.back)}")`; back.style.backgroundSize = 'cover'; back.textContent = ''; } else back.textContent = 'LPTTS'; el.append(back); } if (faceUp) { const name = document.createElement('span'); name.className = 'card-name'; name.textContent = card.name; el.append(name); } return el; }
 
-const hostedAssets = new Map();
-let assetSequence = 0;
-function queueSnapshot(entry, snapshot) {
-  entry.sentAssets ||= new Set();
-  entry.queue ||= Promise.resolve();
-  entry.queue = entry.queue.then(async () => {
-    if (entry.channel.readyState !== 'open') return;
-    const needed = new Map();
-    const wireState = JSON.parse(JSON.stringify(snapshot, (_key, value) => {
-      if (typeof value !== 'string' || !value.startsWith('data:image/')) return value;
-      let id = hostedAssets.get(value);
-      if (!id) { id = `image-${++assetSequence}`; hostedAssets.set(value,id); }
-      if (!entry.sentAssets.has(id)) needed.set(id,value);
-      return `asset://${id}`;
-    }));
-    for (const [id,data] of needed) {
-      sendChannel(entry.channel,{type:'asset-begin',id});
-      for(let offset=0;offset<data.length;offset+=48_000){await waitForBuffer(entry.channel);sendChannel(entry.channel,{type:'asset-chunk',id,data:data.slice(offset,offset+48_000)});}
-      sendChannel(entry.channel,{type:'asset-end',id});entry.sentAssets.add(id);
-    }
-    sendChannel(entry.channel,{type:'state',state:wireState});
-  }).catch((error)=>console.error('LPTTS state delivery failed',error));
-}
-function restoreAssets(value) { return JSON.parse(JSON.stringify(value),(_key,item)=>typeof item==='string'&&item.startsWith('asset://')?(receivedAssets.get(item.slice(8))||''):item); }
-function waitForBuffer(channel){if(channel.bufferedAmount<512_000)return Promise.resolve();channel.bufferedAmountLowThreshold=256_000;return new Promise(resolve=>{const done=()=>{channel.removeEventListener('bufferedamountlow',done);channel.removeEventListener('close',done);resolve();};channel.addEventListener('bufferedamountlow',done,{once:true});channel.addEventListener('close',done,{once:true});});}
-function readDataUrl(file){return new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result);reader.onerror=()=>reject(new Error(`Could not read ${file.name}.`));reader.readAsDataURL(file);});}
-function imageDimensions(file){return new Promise((resolve,reject)=>{const image=new Image(),url=URL.createObjectURL(file);image.onload=()=>{resolve({width:image.naturalWidth,height:image.naturalHeight});URL.revokeObjectURL(url);};image.onerror=()=>{reject(new Error(`${file.name} is not a readable image.`));URL.revokeObjectURL(url);};image.src=url;});}
-function fileSize(bytes){return bytes>=1024*1024?`${(bytes/1024/1024).toFixed(1)} MB`:`${Math.ceil(bytes/1024)} KB`;}
-
-function resetDialog(host){ui.hostPanel.hidden=!host;ui.guestPanel.hidden=host;$('#connect-title').textContent=host?'Add a player':'Join a table';ui.connectStatus.textContent='';$('#answer-code').value='';}
-function enterGame(){ui.lobby.hidden=true;ui.game.hidden=false;ui.connection.textContent=role==='host'?'Hosting locally':'Connecting…';}
-function cleanName(){return ui.name.value.trim().slice(0,24)||'Player';}
-function readStoredName(){try{return localStorage.getItem('lptts-name')||'';}catch{return '';}}
-function saveName(){try{localStorage.setItem('lptts-name',cleanName());}catch{/* Storage is optional. */}}
-function sendChannel(channel,value){if(channel?.readyState==='open')channel.send(JSON.stringify(value));}
-function connectionLabel(value){if(['failed','closed','disconnected'].includes(value))ui.connectStatus.textContent=`Connection ${value}. Create a fresh code and try again.`;}
-function iceComplete(peer, onCandidate) {
-  if (peer.iceGatheringState === 'complete') return Promise.resolve();
-  return new Promise((resolve) => {
-    let finished = false;
-    const done = () => {
-      if (!finished) {
-        finished = true;
-        resolve();
-      }
-    };
-    const timer = setTimeout(done, 6000);
-    peer.addEventListener('icegatheringstatechange', () => {
-      if (peer.iceGatheringState === 'complete') {
-        clearTimeout(timer);
-        done();
-      }
-    });
-    peer.addEventListener('icecandidate', (e) => {
-      if (!e.candidate) {
-        clearTimeout(timer);
-        done();
-      } else if (onCandidate) {
-        onCandidate(e.candidate);
-      }
-    });
-  });
-}
-function compactSdp(sdp, gatheredCandidates = []) {
-  const ufrag = sdp.match(/a=ice-ufrag:(.+)/)?.[1]?.trim() || '';
-  const pwd = sdp.match(/a=ice-pwd:(.+)/)?.[1]?.trim() || '';
-  const fp = (sdp.match(/a=fingerprint:sha-256\s+(.+)/)?.[1]?.trim() || '').replaceAll(':', '');
-  const candidates = [];
-
-  for (const c of gatheredCandidates) {
-    if (!c) continue;
-    const candStr = typeof c === 'string' ? c : (c.candidate || '');
-    const m = candStr.match(/candidate:(\S+)\s+(\d+)\s+(\S+)\s+(\d+)\s+(\S+)\s+(\d+)\s+typ\s+(\S+)(?:\s+raddr\s+(\S+)\s+rport\s+(\d+))?/);
-    if (m) {
-      candidates.push([
-        m[5], // ip
-        Number(m[6]), // port
-        m[7] === 'host' ? 0 : m[7] === 'srflx' ? 1 : 2, // typ
-        m[8] || '', // raddr
-        Number(m[9]) || 0, // rport
-        m[3]?.toLowerCase() === 'tcp' ? 1 : 0 // transport
-      ]);
-    }
-  }
-
-  if (candidates.length === 0) {
-    const candRegex = /a=candidate:(\S+)\s+(\d+)\s+(\S+)\s+(\d+)\s+(\S+)\s+(\d+)\s+typ\s+(\S+)(?:\s+raddr\s+(\S+)\s+rport\s+(\d+))?/g;
-    let m;
-    while ((m = candRegex.exec(sdp)) !== null) {
-      candidates.push([
-        m[5],
-        Number(m[6]),
-        m[7] === 'host' ? 0 : m[7] === 'srflx' ? 1 : 2,
-        m[8] || '',
-        Number(m[9]) || 0,
-        m[3]?.toLowerCase() === 'tcp' ? 1 : 0
-      ]);
-    }
-  }
-
-  return { ufrag, pwd, fp, candidates };
+async function sendChat(event) {
+  event.preventDefault();
+  const input = $('#chat-input'), text = input.value.trim().slice(0, 500);
+  if (!text || !relay) return;
+  input.value = '';
+  try { await relay.send({ type: 'chat', data: { id: randomCode(), name: cleanName(), text, sentAt: Date.now() } }); }
+  catch (error) { toast(`Chat failed: ${error.message}`, true); }
 }
 
-function expandSdp(ufrag, pwd, fp, candidates, type) {
-  const formattedFp = fp.includes(':') ? fp : (fp.match(/.{1,2}/g)?.join(':') || fp);
-  const sessionId = Math.floor(Math.random() * 1e9);
-  let sdp = [
-    'v=0',
-    'o=- ' + sessionId + ' 2 IN IP4 127.0.0.1',
-    's=-',
-    't=0 0',
-    'a=group:BUNDLE 0',
-    'a=extmap-allow-mixed',
-    'a=msid-semantic: WMS',
-    'm=application 9 UDP/DTLS/SCTP webrtc-datachannel',
-    'c=IN IP4 0.0.0.0',
-    'a=ice-ufrag:' + ufrag,
-    'a=ice-pwd:' + pwd,
-    'a=ice-options:trickle',
-    'a=fingerprint:sha-256 ' + formattedFp,
-    'a=setup:' + (type === 'offer' ? 'actpass' : 'active'),
-    'a=mid:0',
-    'a=sctp-port:5000',
-    'a=max-message-size:262144'
-  ];
-  for (let i = 0; i < candidates.length; i++) {
-    const [ip, port, typ, raddr, rport, transport] = candidates[i];
-    const typeStr = typ === 0 ? 'host' : typ === 1 ? 'srflx' : 'relay';
-    const transStr = transport === 1 ? 'tcp' : 'udp';
-    const priority = typ === 0 ? (2113937151 - i * 1000) : typ === 1 ? (1677729535 - i * 1000) : (33562367 - i * 1000);
-    let line = 'a=candidate:' + (i + 1) + ' 1 ' + transStr + ' ' + priority + ' ' + ip + ' ' + port + ' typ ' + typeStr;
-    if (raddr || rport || typ !== 0) {
-      line += ' raddr ' + (raddr || '0.0.0.0') + ' rport ' + (rport || 0);
-    }
-    if (transport === 1) {
-      line += ' tcptype active';
-    }
-    line += ' generation 0';
-    sdp.push(line);
-  }
-  return sdp.join('\r\n') + '\r\n';
+function addChat(message) {
+  const id = message.id || message.eventId;
+  if (seenChat.has(id)) return;
+  seenChat.add(id);
+  const item = document.createElement('div'); item.className = 'chat-message';
+  const meta = document.createElement('strong'); meta.textContent = message.name || 'Player';
+  const body = document.createElement('span'); body.textContent = message.text || '';
+  item.append(meta, body);
+  const list = $('#chat-messages'); list.append(item); list.scrollTop = list.scrollHeight;
+  if ($('#chat-panel').classList.contains('minimized')) { $('#chat-toggle').classList.add('unread'); $('#chat-toggle').setAttribute('aria-label', 'Open chat, new message'); }
 }
 
-async function encode(value) {
-  let payload;
-  if (value.type === 'offer' && value.sdp?.sdp) {
-    const c = compactSdp(value.sdp.sdp, value.candidates || []);
-    payload = [2, 'O', value.id, c.ufrag, c.pwd, c.fp, c.candidates, value.turn || null];
-  } else if (value.type === 'answer' && value.sdp?.sdp) {
-    const c = compactSdp(value.sdp.sdp, value.candidates || []);
-    payload = [2, 'A', value.id, value.name || '', c.ufrag, c.pwd, c.fp, c.candidates];
-  } else {
-    payload = value;
-  }
+function toggleChat() {
+  const panel = $('#chat-panel'); panel.classList.toggle('minimized');
+  $('#chat-toggle').classList.remove('unread'); $('#chat-toggle').setAttribute('aria-label', 'Toggle chat');
+  if (!panel.classList.contains('minimized')) $('#chat-input').focus();
+}
 
-  const bytes = new TextEncoder().encode(JSON.stringify(payload));
+function restoreSession() {
+  relay = RelaySession.restore(relayHandlers());
+  if (!relay) return false;
   try {
-    const cs = new CompressionStream('deflate-raw');
-    const writer = cs.writable.getWriter();
-    writer.write(bytes);
-    writer.close();
-    const compressed = new Uint8Array(await new Response(cs.readable).arrayBuffer());
-    let binary = '';
-    for (let i = 0; i < compressed.length; i++) binary += String.fromCharCode(compressed[i]);
-    return btoa(binary).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '');
-  } catch {
-    let binary = '';
-    for (const byte of bytes) binary += String.fromCharCode(byte);
-    return btoa(binary).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '');
-  }
+    role = relay.role; playerId = relay.participantId;
+    if (role === 'host') {
+      room = GameRoom.restore(JSON.parse(sessionStorage.getItem(HOST_STATE_KEY) || 'null'));
+      for (const id of room.players.keys()) if (id !== playerId) remotePlayers.add(id);
+      state = room.viewFor(playerId);
+    } else state = JSON.parse(sessionStorage.getItem(GUEST_STATE_KEY) || 'null');
+    enterGame(); render(); relay.start(); return true;
+  } catch { relay.clear(); relay = null; role = ''; return false; }
 }
 
-async function decode(code, type) {
-  try {
-    const normalized = code.trim().replaceAll('-', '+').replaceAll('_', '/');
-    const pad = (4 - (normalized.length % 4)) % 4;
-    const padded = normalized + '='.repeat(pad);
-    const binary = atob(padded);
-    const bytes = Uint8Array.from(binary, c => c.charCodeAt(0));
-    let parsed;
-    try {
-      const ds = new DecompressionStream('deflate-raw');
-      const writer = ds.writable.getWriter();
-      writer.write(bytes);
-      writer.close();
-      const decompressed = new Uint8Array(await new Response(ds.readable).arrayBuffer());
-      parsed = JSON.parse(new TextDecoder().decode(decompressed));
-    } catch {
-      parsed = JSON.parse(new TextDecoder().decode(bytes));
-    }
-
-    if (Array.isArray(parsed) && parsed[0] === 2) {
-      if (parsed[1] === 'O' && type === 'offer') {
-        const [v, t, id, ufrag, pwd, fp, candidates, turn] = parsed;
-        return {
-          v: 1,
-          type: 'offer',
-          id,
-          sdp: { type: 'offer', sdp: expandSdp(ufrag, pwd, fp, candidates, 'offer') },
-          turn: turn || undefined
-        };
-      }
-      if (parsed[1] === 'A' && type === 'answer') {
-        const [v, t, id, name, ufrag, pwd, fp, candidates] = parsed;
-        return {
-          v: 1,
-          type: 'answer',
-          id,
-          name,
-          sdp: { type: 'answer', sdp: expandSdp(ufrag, pwd, fp, candidates, 'answer') }
-        };
-      }
-    }
-
-    if (parsed.v === 1 && parsed.type === type && parsed.sdp) {
-      return parsed;
-    }
-    throw 0;
-  } catch {
-    throw new Error(`That is not a valid ${type} code.`);
-  }
-}
-
-function copy(value, message = 'Code copied to clipboard') {
-  if (!value || !value.trim()) return toast('Nothing to copy', true);
-  const text = value.trim();
-  if (navigator.clipboard?.writeText) {
-    navigator.clipboard.writeText(text)
-      .then(() => toast(message))
-      .catch(() => fallbackCopy(text, message));
-  } else {
-    fallbackCopy(text, message);
-  }
-}
-
-function fallbackCopy(value, message) {
-  try {
-    const temp = document.createElement('textarea');
-    temp.value = value;
-    temp.style.position = 'fixed';
-    temp.style.opacity = '0';
-    document.body.appendChild(temp);
-    temp.focus();
-    temp.select();
-    document.execCommand('copy');
-    document.body.removeChild(temp);
-    toast(message);
-  } catch {
-    toast('Select and copy the code manually', true);
-  }
-}
-
-async function pasteInto(element, message = 'Pasted from clipboard') {
-  try {
-    if (navigator.clipboard?.readText) {
-      const text = await navigator.clipboard.readText();
-      if (text) {
-        element.value = text.trim();
-        toast(message);
-        return;
-      }
-    }
-  } catch {
-    /* Browser clipboard read blocked or unavailable */
-  }
-  element.focus();
-  element.select();
-  toast('Ready to paste');
-}
-
-function toast(message, error = false) {
-  ui.toast.textContent = message;
-  ui.toast.style.background = error ? '#8f3434' : '#171b18';
-
-  const openDialog = document.querySelector('dialog[open]');
-  if (openDialog && ui.toast.parentElement !== openDialog) {
-    openDialog.appendChild(ui.toast);
-  } else if (!openDialog && ui.toast.parentElement !== document.body) {
-    document.body.appendChild(ui.toast);
-  }
-
-  ui.toast.classList.add('show');
-  clearTimeout(toast.timer);
-  toast.timer = setTimeout(() => ui.toast.classList.remove('show'), 2600);
-}
-function randomCode(){return Math.random().toString(36).slice(2,7).toUpperCase();}
-function newId(){if(globalThis.crypto?.randomUUID)return globalThis.crypto.randomUUID();const bytes=new Uint8Array(16);if(globalThis.crypto?.getRandomValues)globalThis.crypto.getRandomValues(bytes);else for(let i=0;i<bytes.length;i++)bytes[i]=Math.floor(Math.random()*256);return [...bytes].map(value=>value.toString(16).padStart(2,'0')).join('');}
-function initials(name){return name.split(/\s+/).map(v=>v[0]).join('').slice(0,2).toUpperCase();}
-function escapeHtml(value){return String(value).replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));}
-function cssUrl(value){return String(value).replace(/["\\\n\r]/g,'');}
+function saveHostState() { try { sessionStorage.setItem(HOST_STATE_KEY, JSON.stringify(room.serialize())); } catch { /* Optional. */ } }
+function saveGuestState() { try { sessionStorage.setItem(GUEST_STATE_KEY, JSON.stringify(state)); } catch { /* Optional. */ } }
+function enterGame() { ui.lobby.hidden = true; ui.game.hidden = false; ui.connection.textContent = role === 'host' ? 'Relay online · hosting' : 'Joining table…'; }
+function cleanName() { return ui.name.value.trim().slice(0, 24) || 'Player'; }
+function readStoredName() { try { return localStorage.getItem('lptts-name') || ''; } catch { return ''; } }
+function saveName() { try { localStorage.setItem('lptts-name', cleanName()); } catch { /* Optional. */ } }
+function codeFromUrl() { return new URLSearchParams(location.search).get('room')?.slice(0, 6).toUpperCase() || ''; }
+function networkError(error) { toast(`Relay error: ${error.message}`, true); }
+function imageDimensions(file) { return new Promise((resolve, reject) => { const image = new Image(), url = URL.createObjectURL(file); image.onload = () => { resolve({ width: image.naturalWidth, height: image.naturalHeight }); URL.revokeObjectURL(url); }; image.onerror = () => { reject(new Error(`${file.name} is not a readable image.`)); URL.revokeObjectURL(url); }; image.src = url; }); }
+function fileSize(bytes) { return bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB` : `${Math.ceil(bytes / 1024)} KB`; }
+function initials(name) { return String(name || '?').split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase(); }
+function randomCode() { return crypto.getRandomValues(new Uint32Array(2)).join('-'); }
+function cssUrl(value) { return String(value || '').replace(/["\\\n\r]/g, (char) => `\\${char}`); }
+function escapeHtml(value) { const el = document.createElement('span'); el.textContent = value; return el.innerHTML; }
+async function copy(value, message) { try { await navigator.clipboard.writeText(value); toast(message); } catch { toast('Copy failed—select the text manually', true); } }
+let toastTimer;
+function toast(message, bad = false) { ui.toast.textContent = message; ui.toast.style.background = bad ? '#8f302d' : ''; ui.toast.classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(() => ui.toast.classList.remove('show'), 2600); }

@@ -1,147 +1,104 @@
 import { chromium } from '/home/james/.npm/_npx/e41f203b7505f1fb/node_modules/playwright/index.mjs';
 import { createStaticServer } from './server.js';
-import fs from 'node:fs';
-import path from 'node:path';
+
+const RELAY_URL = 'https://api.msyumyum.com/lptts.php';
+
+function createMockRelay() {
+  const rooms = new Map(), participants = new Map();
+  let nextEvent = 1, nextParticipant = 1;
+  const token = () => `test-token-${nextParticipant}-${'x'.repeat(24)}`;
+  const addEvent = (room, sender, type, data, target = null) => {
+    const event = { id: nextEvent++, sender, type, data, createdAt: Date.now(), target };
+    room.events.push(event);
+    return event;
+  };
+  return async (route) => {
+    const body = route.request().postDataJSON();
+    let result;
+    if (body.op === 'create') {
+      const code = 'ROOM42', id = `player-${nextParticipant++}`, auth = token();
+      const room = { code, hostId: id, events: [] };
+      rooms.set(code, room); participants.set(auth, { id, room, name: body.name, role: 'host' });
+      result = { ok: true, code, participantId: id, token: auth, cursor: 0 };
+    } else if (body.op === 'join') {
+      const room = rooms.get(body.code), id = `player-${nextParticipant++}`, auth = token();
+      if (!room) result = { ok: false, message: 'Table code was not found.' };
+      else {
+        participants.set(auth, { id, room, name: body.name, role: 'guest' });
+        const event = addEvent(room, id, 'join', { id, name: body.name }, room.hostId);
+        result = { ok: true, code: room.code, participantId: id, token: auth, cursor: event.id };
+      }
+    } else {
+      const participant = participants.get(body.token);
+      if (!participant) result = { ok: false, message: 'Session is not authorized.' };
+      else if (body.op === 'send') {
+        for (const message of body.messages) {
+          const target = message.target === 'host' ? participant.room.hostId : (message.target || null);
+          const data = message.type === 'chat' ? { ...message.data, name: participant.name } : message.data;
+          addEvent(participant.room, participant.id, message.type, data, target);
+        }
+        result = { ok: true };
+      } else if (body.op === 'poll') {
+        await new Promise((resolve) => setTimeout(resolve, 40));
+        const events = participant.room.events.filter((event) => event.id > body.since && (!event.target || event.target === participant.id)).map(({ target, ...event }) => event);
+        result = { ok: true, events, cursor: events.at(-1)?.id || body.since };
+      } else result = { ok: false, message: 'Unsupported test operation.' };
+    }
+    await route.fulfill({ status: result.ok ? 200 : 403, contentType: 'application/json', body: JSON.stringify(result) });
+  };
+}
 
 async function runConnectionTest() {
-  console.log('--- Starting LPTTS Compressed Connection & Copy-Toast Test ---');
-  
-  const outputDir = path.resolve('test-results');
-  if (!fs.existsSync(outputDir)) {
-    fs.mkdirSync(outputDir, { recursive: true });
-  }
-
-  const staticServer = await createStaticServer();
-  const baseUrl = staticServer.url;
-  console.log(`[1] Static test server listening on ${baseUrl}`);
-
+  const server = await createStaticServer();
   const browser = await chromium.launch({ headless: true });
-  console.log('[2] Playwright Chromium browser launched');
-
+  const relay = createMockRelay();
   try {
-    console.log('[3] Setting up Client 1 (Host)...');
-    const hostContext = await browser.newContext({
-      viewport: { width: 1280, height: 800 },
-      permissions: ['clipboard-read', 'clipboard-write']
-    });
-    const hostPage = await hostContext.newPage();
-    
-    hostPage.on('pageerror', err => console.error('[Host Page Error]:', err));
-    hostPage.on('console', msg => console.log(`[Host Console ${msg.type()}]:`, msg.text()));
-    await hostPage.goto(baseUrl);
+    const hostContext = await browser.newContext({ permissions: ['clipboard-read', 'clipboard-write'] });
+    const guestContext = await browser.newContext({ permissions: ['clipboard-read', 'clipboard-write'] });
+    await hostContext.route(RELAY_URL, relay);
+    await guestContext.route(RELAY_URL, relay);
+    const host = await hostContext.newPage(), guest = await guestContext.newPage();
+    for (const [name, page] of [['host', host], ['guest', guest]]) {
+      page.on('pageerror', (error) => console.error(`${name} page error:`, error));
+      await page.goto(server.url);
+    }
 
-    // Save TURN settings in UI
-    await hostPage.click('#lobby-settings');
-    await hostPage.waitForSelector('#settings-dialog[open]');
-    await hostPage.fill('#setting-turn-host', 'global.relay.metered.ca');
-    await hostPage.fill('#setting-turn-user', 'test-metered-user');
-    await hostPage.fill('#setting-turn-cred', 'test-metered-pass');
-    await hostPage.click('#settings-form button[type="submit"]');
-    await hostPage.waitForFunction(() => !document.querySelector('#settings-dialog')?.open);
+    await host.fill('#name', 'Alice');
+    await host.click('#host-button');
+    await host.waitForSelector('#connect-dialog[open]');
+    const code = await host.inputValue('#room-code');
+    if (code !== 'ROOM42') throw new Error(`Unexpected room code: ${code}`);
 
-    // Host opens room
-    await hostPage.fill('#name', 'Alice (Host)');
-    await hostPage.click('#host-button');
-    await hostPage.waitForSelector('#game:not([hidden])', { timeout: 10000 });
+    await guest.fill('#name', 'Bob');
+    await guest.click('#join-button');
+    await guest.fill('#join-code', code);
+    await guest.click('#join-room');
+    await host.waitForFunction(() => document.querySelector('#player-count')?.textContent === '2');
+    await guest.waitForFunction(() => document.querySelector('#player-count')?.textContent === '2');
 
-    // Host clicks table connections badge to create offer
-    console.log('[4] Host creating compressed offer code...');
-    await hostPage.click('#connections');
-    await hostPage.waitForSelector('#connect-dialog[open]', { timeout: 15000 });
-    
-    await hostPage.waitForFunction(() => {
-      const val = document.querySelector('#offer-code')?.value;
-      return val && val.length > 30;
-    }, { timeout: 10000 });
+    await host.fill('#chat-input', 'Welcome to the table');
+    await host.click('#chat-form button');
+    await guest.waitForFunction(() => document.querySelector('#chat-messages')?.textContent.includes('Welcome to the table'));
+    await guest.click('#chat-minimize');
+    await host.fill('#chat-input', 'Second message');
+    await host.click('#chat-form button');
+    await guest.waitForSelector('#chat-toggle.unread');
 
-    const offerCode = await hostPage.$eval('#offer-code', el => el.value);
-    console.log(`    - Host generated compressed offer code: ${offerCode.length} characters (previously ~1280 chars)`);
+    const deck = { ObjectStates: [{ Name: 'DeckCustom', Nickname: 'Test deck', CustomDeck: { 1: { FaceURL: 'https://example.com/faces.jpg', BackURL: 'https://example.com/back.jpg', NumWidth: 1, NumHeight: 1 } }, DeckIDs: [100], ContainedObjects: [{ Name: 'CardCustom', Nickname: 'Ace', CardID: 100 }] }] };
+    await host.setInputFiles('#tts-file', { name: 'deck.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(deck)) });
+    await host.waitForFunction(() => document.querySelector('#deck-label')?.textContent === '1 cards');
+    await guest.waitForFunction(() => document.querySelector('#deck-label')?.textContent === '1 cards');
+    await guest.click('#deck');
+    await guest.waitForFunction(() => document.querySelector('#hand-count')?.textContent === '1');
 
-    // Test copy button and toast on Host
-    console.log('    - Testing Host Copy Button and Toast...');
-    await hostPage.click('#copy-offer');
-    await hostPage.waitForSelector('.toast.show', { timeout: 3000 });
-    const hostToastText = await hostPage.$eval('.toast', el => el.textContent);
-    console.log(`    - Host toast displayed: "${hostToastText}"`);
-
-    // Setup Client 2 (Guest)
-    console.log('[5] Setting up Client 2 (Guest)...');
-    const guestContext = await browser.newContext({
-      viewport: { width: 1280, height: 800 },
-      permissions: ['clipboard-read', 'clipboard-write']
-    });
-    const guestPage = await guestContext.newPage();
-    guestPage.on('pageerror', err => console.error('[Guest Page Error]:', err));
-    guestPage.on('console', msg => console.log(`[Guest Console ${msg.type()}]:`, msg.text()));
-
-    await guestPage.goto(baseUrl);
-    await guestPage.fill('#name', 'Bob (Guest)');
-    await guestPage.click('#join-button');
-    await guestPage.waitForSelector('#connect-dialog[open]', { timeout: 10000 });
-
-    // Guest pastes compressed offer code
-    console.log('[6] Guest pasting compressed offer and generating answer...');
-    await guestPage.fill('#join-offer', offerCode);
-    await guestPage.click('#make-answer');
-
-    await guestPage.waitForSelector('#answer-result:not([hidden])', { timeout: 15000 });
-    await guestPage.waitForFunction(() => {
-      const val = document.querySelector('#guest-answer')?.value;
-      return val && val.length > 30;
-    }, { timeout: 15000 });
-
-    const answerCode = await guestPage.$eval('#guest-answer', el => el.value);
-    console.log(`    - Guest generated compressed answer code: ${answerCode.length} characters (previously ~990 chars)`);
-
-    // Test copy button and toast on Guest
-    console.log('    - Testing Guest Copy Button and Toast...');
-    await guestPage.click('#copy-answer');
-    await guestPage.waitForSelector('.toast.show', { timeout: 3000 });
-    const guestToastText = await guestPage.$eval('.toast', el => el.textContent);
-    console.log(`    - Guest toast displayed: "${guestToastText}"`);
-
-    // Host receives answer and completes connection
-    console.log('[7] Host completing connection...');
-    await hostPage.fill('#answer-code', answerCode);
-    await hostPage.click('#accept-answer');
-
-    // Verification of connection
-    console.log('[8] Awaiting WebRTC connection establishment...');
-    
-    // Check status in case of error
-    const hostStatus = await hostPage.$eval('#connect-status', el => el.textContent);
-    const guestStatus = await guestPage.$eval('#connect-status', el => el.textContent);
-    console.log(`    - Host connect-status: "${hostStatus}"`);
-    console.log(`    - Guest connect-status: "${guestStatus}"`);
-
-    await guestPage.waitForFunction(() => !document.querySelector('#connect-dialog')?.open, { timeout: 15000 });
-    await guestPage.waitForSelector('#game:not([hidden])', { timeout: 15000 });
-    await guestPage.waitForFunction(() => {
-      const text = document.querySelector('#connection')?.textContent;
-      return text && text.includes('Connected to host');
-    }, { timeout: 15000 });
-
-    await hostPage.waitForFunction(() => !document.querySelector('#connect-dialog')?.open, { timeout: 15000 });
-    await hostPage.waitForFunction(() => document.querySelector('#player-count')?.textContent === '2', { timeout: 15000 });
-    await guestPage.waitForFunction(() => document.querySelector('#player-count')?.textContent === '2', { timeout: 15000 });
-
-    const hostScreenshot = path.join(outputDir, 'client1-host-connected.png');
-    const guestScreenshot = path.join(outputDir, 'client2-guest-connected.png');
-    await hostPage.screenshot({ path: hostScreenshot, fullPage: true });
-    await guestPage.screenshot({ path: guestScreenshot, fullPage: true });
-
-    console.log('\n>>> SUCCESS: Compressed codes + Copy buttons + Toasts verified successfully! <<<');
-
-    await hostContext.close();
-    await guestContext.close();
+    await guest.reload();
+    await guest.waitForSelector('#game:not([hidden])');
+    await guest.waitForFunction(() => document.querySelector('#hand-count')?.textContent === '1');
+    console.log('E2E passed: room join, private state, chat/minimize/unread, action relay, and reload resume');
+    await hostContext.close(); await guestContext.close();
   } finally {
-    await browser.close();
-    await staticServer.close();
-    console.log('--- Test Run Completed ---\n');
+    await browser.close(); await server.close();
   }
 }
 
-runConnectionTest().catch(err => {
-  console.error('Test failed with error:', err);
-  process.exit(1);
-});
+runConnectionTest().catch((error) => { console.error(error); process.exit(1); });
