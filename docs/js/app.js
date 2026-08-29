@@ -188,7 +188,8 @@ async function updateImageSummary() {
 
 function render() {
   if (!state) return;
-  ui.connections.textContent = role === 'host' ? `${state.code} · + PLAYER` : state.code;
+  const shareLabel = role === 'host' ? `Share table ${state.code}` : `Table code ${state.code}`;
+  ui.connections.title = shareLabel; ui.connections.setAttribute('aria-label', shareLabel);
   ui.playerCount.textContent = state.players.length;
   ui.players.replaceChildren(...state.players.map((player) => {
     const row = document.createElement('div'); row.className = 'player-row';
