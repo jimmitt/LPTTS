@@ -7,6 +7,8 @@ export class GameRoom {
     this.table = [];
     this.deck = [];
     this.selections = new Map();
+    this.objects = [];
+    this.background = '';
   }
 
   static restore(data) {
@@ -18,11 +20,13 @@ export class GameRoom {
     room.table = data.table;
     room.deck = data.deck;
     room.selections = new Map(Array.isArray(data.selections) ? data.selections : []);
+    room.objects = Array.isArray(data.objects) ? data.objects : [];
+    room.background = typeof data.background === 'string' ? data.background : '';
     return room;
   }
 
   serialize() {
-    return { code: this.code, players: [...this.players.values()], table: this.table, deck: this.deck, selections: [...this.selections] };
+    return { code: this.code, players: [...this.players.values()], table: this.table, deck: this.deck, selections: [...this.selections], objects: this.objects, background: this.background };
   }
 
   join(id, name) {
@@ -105,10 +109,76 @@ export class GameRoom {
     if (!this.players.has(playerId)) throw new Error('Player not found.');
     this.selections.delete(playerId);
     if (!cardId) return;
+    const ownHand = this.players.get(playerId).hand;
+    const exists = this.table.some(({ id }) => id === cardId) || this.objects.some(({ id }) => id === cardId) || ownHand.some(({ id }) => id === cardId);
+    if (!exists) throw new Error('Object is no longer available.');
     for (const [otherPlayer, selectedCard] of this.selections) {
       if (selectedCard === cardId) this.selections.delete(otherPlayer);
     }
     this.selections.set(playerId, cardId);
+  }
+
+  setBackground(playerId, url) {
+    if (!this.players.has(playerId)) throw new Error('Player not found.');
+    const value = String(url || '').trim();
+    if (value && (!/^https:\/\//i.test(value) || value.length > 2048)) throw new Error('Use a valid HTTPS background image URL.');
+    this.background = value;
+    this.select(playerId, null);
+  }
+
+  createDie(playerId, sides = 6, color = '#f4f0e6') {
+    if (!this.players.has(playerId)) throw new Error('Player not found.');
+    const allowedSides = [4, 6, 8, 10, 12, 20, 100], sideCount = Number(sides);
+    if (!allowedSides.includes(sideCount)) throw new Error('Choose a supported die size.');
+    const dieColor = /^#[0-9a-f]{6}$/i.test(String(color)) ? String(color) : '#f4f0e6';
+    const die = {
+      id: crypto.randomUUID(), type: 'die', sides: sideCount,
+      value: randomRoll(sideCount), color: dieColor,
+      x: clamp(68 + Math.random() * 10), y: clamp(67 + Math.random() * 8),
+      rotation: Math.floor(Math.random() * 25) - 12, owner: playerId
+    };
+    this.objects.push(die); this.select(playerId, die.id);
+    return die;
+  }
+
+  moveObject(playerId, objectId, x, y) {
+    if (!this.players.has(playerId)) throw new Error('Player not found.');
+    const object = this.objects.find(({ id }) => id === objectId);
+    if (!object) throw new Error('Object is no longer on the table.');
+    object.x = clamp(x); object.y = clamp(y); this.select(playerId, objectId);
+  }
+
+  rollDie(playerId, objectId) {
+    if (!this.players.has(playerId)) throw new Error('Player not found.');
+    const die = this.objects.find(({ id, type }) => id === objectId && type === 'die');
+    if (!die) throw new Error('Die is no longer on the table.');
+    die.value = randomRoll(die.sides); die.rotation = Math.floor(Math.random() * 31) - 15;
+    this.select(playerId, objectId);
+    return die.value;
+  }
+
+  destroy(playerId, objectId) {
+    if (!this.players.has(playerId)) throw new Error('Player not found.');
+    const objectIndex = this.objects.findIndex(({ id }) => id === objectId);
+    if (objectIndex >= 0) {
+      this.objects.splice(objectIndex, 1); this.clearSelectionsFor(new Set([objectId])); return;
+    }
+    const tableIndex = this.table.findIndex(({ id }) => id === objectId);
+    if (tableIndex >= 0) {
+      const ids = new Set(pileCards(this.table[tableIndex]).map(({ id }) => id));
+      this.table.splice(tableIndex, 1); this.clearSelectionsFor(ids); return;
+    }
+    const player = this.players.get(playerId), handIndex = player?.hand.findIndex(({ id }) => id === objectId) ?? -1;
+    if (handIndex >= 0) {
+      player.hand.splice(handIndex, 1); this.clearSelectionsFor(new Set([objectId])); return;
+    }
+    throw new Error('Object is no longer available.');
+  }
+
+  clearSelectionsFor(ids) {
+    for (const [selectedPlayer, selectedId] of this.selections) {
+      if (ids.has(selectedId)) this.selections.delete(selectedPlayer);
+    }
   }
 
   stack(playerId, sourceId, targetId) {
@@ -175,6 +245,8 @@ export class GameRoom {
       deckBack: this.deck.length ? this.deck[this.deck.length - 1].back || '' : '',
       table: this.table,
       selections: [...this.selections],
+      objects: this.objects,
+      background: this.background,
       players: [...this.players.values()].map((player) => ({
         id: player.id, name: player.name, color: player.color,
         handCount: player.hand.length,
@@ -185,6 +257,7 @@ export class GameRoom {
 }
 
 function clamp(value) { return Math.max(3, Math.min(97, Number(value) || 50)); }
+function randomRoll(sides) { return Math.floor(Math.random() * sides) + 1; }
 function pileCards(card) { return [...(card.stack || []).map(cleanCard), cleanCard(card)]; }
 function cleanCard(card) { const { stack, x, y, rotation, ...clean } = card; return clean; }
 function makePile(cards, position) { const top = { ...cards[cards.length - 1], ...position }; if (cards.length > 1) top.stack = cards.slice(0, -1).map(cleanCard); return top; }

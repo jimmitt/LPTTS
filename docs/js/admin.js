@@ -86,7 +86,8 @@ function renderObservation(data) {
     el.append(name, meta); return el;
   }));
   const state = data.state; $('#no-snapshot').hidden = Boolean(state);
-  $('#observe-cards').replaceChildren(...(state?.table || []).map((card) => observeCard(card, state)));
+  const felt = $('#observe-table'); felt.style.backgroundImage = state?.background ? `url("${cssUrl(state.background)}")` : ''; felt.classList.toggle('has-background', Boolean(state?.background));
+  $('#observe-cards').replaceChildren(...(state?.table || []).map((card) => observeCard(card, state)), ...(state?.objects || []).map((object) => observeObject(object, state)));
   const deck = $('#observe-deck'); deck.hidden = !state?.deckCount; $('#observe-deck-count').textContent = state?.deckCount || '';
   deck.style.backgroundImage = state?.deckBack ? `url("${cssUrl(state.deckBack)}")` : '';
 }
@@ -107,6 +108,14 @@ function observeCard(card, state) {
   return el;
 }
 
+function observeObject(object, state) {
+  const el = document.createElement('div'); el.className = 'observe-object'; el.style.left = `${object.x}%`; el.style.top = `${object.y}%`; el.style.transform = `translate(-50%,-50%) rotate(${Number(object.rotation) || 0}deg)`;
+  if (object.type === 'die') { el.classList.add('observe-die'); el.style.background = object.color; el.style.color = contrastColor(object.color); el.textContent = object.value; const sides = document.createElement('small'); sides.textContent = `D${object.sides}`; el.append(sides); }
+  const selected = (state.selections || []).find(([, selectedId]) => selectedId === object.id), player = selected && state.players.find(({ id }) => id === selected[0]);
+  if (player) el.style.outline = `4px solid ${player.color}`;
+  return el;
+}
+
 async function deleteRoom(code) {
   if (!confirm(`Delete table ${code} and disconnect all of its players? This cannot be undone.`)) return;
   try { await api('admin_delete', { code }); toast(`Table ${code} deleted`); if (observedCode === code) closeObserver(); await loadRooms(); }
@@ -119,4 +128,5 @@ function button(label, action, className = '') { const el = document.createEleme
 function formatDate(seconds) { return new Date(seconds * 1000).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }); }
 function relativeTime(seconds) { const age = Math.max(0, Math.floor(Date.now() / 1000) - seconds); if (age < 10) return 'just now'; if (age < 60) return `${age}s ago`; if (age < 3600) return `${Math.floor(age / 60)}m ago`; return `${Math.floor(age / 3600)}h ago`; }
 function cssUrl(value) { return String(value || '').replace(/["\\\n\r]/g, (char) => `\\${char}`); }
+function contrastColor(hex) { const rgb = Number.parseInt(String(hex || '').replace('#', ''), 16); return (((rgb >> 16) * 299 + ((rgb >> 8) & 255) * 587 + (rgb & 255) * 114) / 1000) > 145 ? '#171b18' : '#fffdf8'; }
 let toastTimer; function toast(message, bad = false) { const el = $('#toast'); el.textContent = message; el.style.background = bad ? '#8f302d' : ''; el.classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(() => el.classList.remove('show'), 2600); }

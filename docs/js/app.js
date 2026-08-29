@@ -1,4 +1,4 @@
-import { GameRoom } from './game.js?v=3';
+import { GameRoom } from './game.js?v=4';
 import { parseTtsDeck } from './tts.js';
 import { createImageDeck } from './image-deck.js?v=2';
 import { RelaySession } from './relay.js?v=2';
@@ -7,13 +7,13 @@ const $ = (selector) => document.querySelector(selector);
 const ui = {
   lobby: $('#lobby'), game: $('#game'), hostButton: $('#host-button'), name: $('#name'), status: $('#lobby-status'),
   players: $('#players'), playerCount: $('#player-count'), connections: $('#connections'), connection: $('#connection'),
-  tableCards: $('#table-cards'), empty: $('#empty-table'), deck: $('#deck'), deckCount: $('.deck-count'),
+  tableCards: $('#table-cards'), tableObjects: $('#table-objects'), table: $('#table'), empty: $('#empty-table'), deck: $('#deck'), deckCount: $('.deck-count'),
   deckLabel: $('#deck-label'), shuffle: $('#shuffle'), hand: $('#hand'), handCount: $('#hand-count'), file: $('#tts-file'),
   toast: $('#toast'), dialog: $('#connect-dialog'), hostPanel: $('#connect-host'), guestPanel: $('#connect-guest')
 };
 let role = '', playerId = '', state, room, relay;
 let savedRelay;
-let hoveredCard = null, zoomHeld = false;
+let hoveredCard = null, hoveredObject = null, zoomHeld = false;
 let pendingDealCardId = '';
 const remotePlayers = new Set();
 const seenChat = new Set();
@@ -41,6 +41,12 @@ ui.deck.addEventListener('click', () => { clearLocalSelection(); action('draw');
 ui.shuffle.addEventListener('click', () => { clearLocalSelection(); action('shuffle'); });
 $('#table').addEventListener('pointerdown', clearSelectionFromTable);
 $('#deal-form').addEventListener('submit', submitDeal);
+$('#add-die').addEventListener('click', () => $('#dice-dialog').showModal());
+$('#dice-form').addEventListener('submit', createDie);
+$('#trash-object').addEventListener('click', destroySelectedObject);
+$('#background-button').addEventListener('click', openBackgroundDialog);
+$('#background-form').addEventListener('submit', applyBackground);
+$('#remove-background').addEventListener('click', removeBackground);
 $('#chat-toggle').addEventListener('click', toggleChat);
 $('#chat-minimize').addEventListener('click', toggleChat);
 $('#chat-form').addEventListener('submit', sendChat);
@@ -142,6 +148,14 @@ function applyHostAction(actor, type, body) {
     else if (type === 'stack') room.stack(actor, body.sourceId, body.targetId);
     else if (type === 'shuffleStack') room.shuffleStack(actor, body.cardId);
     else if (type === 'dealStack') room.dealStack(actor, body.cardId, body.countEach, body.destination, body.faceUp);
+    else if (type === 'createDie') room.createDie(actor, body.sides, body.color);
+    else if (type === 'moveObject') room.moveObject(actor, body.objectId, body.x, body.y);
+    else if (type === 'rollDie') room.rollDie(actor, body.objectId);
+    else if (type === 'destroy') room.destroy(actor, body.objectId);
+    else if (type === 'background') {
+      if (actor !== playerId) throw new Error('Only the host can change the table background.');
+      room.setBackground(actor, body.url);
+    }
     else throw new Error('Unknown action.');
     updateHost();
   } catch (error) {
@@ -211,7 +225,12 @@ function render() {
   ui.deckLabel.textContent = state.deckCount ? `${state.deckCount} cards` : 'No deck';
   ui.deck.disabled = !state.deckCount; ui.shuffle.disabled = !state.deckCount;
   ui.deck.style.backgroundImage = state.deckBack ? `url("${cssUrl(state.deckBack)}")` : '';
-  ui.tableCards.replaceChildren(...state.table.map(tableCard)); ui.empty.hidden = state.table.length > 0;
+  ui.table.style.backgroundImage = state.background ? `url("${cssUrl(state.background)}")` : '';
+  ui.table.classList.toggle('has-background', Boolean(state.background));
+  ui.tableCards.replaceChildren(...state.table.map(tableCard));
+  ui.tableObjects.replaceChildren(...(state.objects || []).map(tableObject));
+  ui.empty.hidden = state.table.length > 0 || (state.objects || []).length > 0;
+  $('#trash-object').disabled = !ownSelection();
 }
 
 function handCard(card) {
@@ -236,6 +255,21 @@ function tableCard(card, index) {
   el.addEventListener('dblclick', () => action('flip', { cardId: card.id }));
   el.addEventListener('contextmenu', (event) => { event.preventDefault(); action('take', { cardId: card.id }); });
   el.addEventListener('pointerdown', (event) => dragTableCard(event, el, card));
+  return el;
+}
+
+function tableObject(object, index) {
+  if (object.type !== 'die') return document.createDocumentFragment();
+  const el = document.createElement('div'); el.className = 'table-object die';
+  el.dataset.objectId = object.id; el.style.left = `${object.x}%`; el.style.top = `${object.y}%`; el.style.zIndex = 1000 + index;
+  el.style.transform = `translate(-50%,-50%) rotate(${object.rotation || 0}deg)`; el.style.background = object.color;
+  el.style.color = contrastColor(object.color); el.title = `D${object.sides} · Hover and press S to roll`;
+  const value = document.createElement('strong'); value.textContent = object.value;
+  const sides = document.createElement('small'); sides.textContent = `D${object.sides}`;
+  el.append(value, sides); applyCardSelection(el, object.id);
+  el.addEventListener('pointerenter', () => { hoveredObject = { element: el, object }; });
+  el.addEventListener('pointerleave', () => { if (hoveredObject?.element === el) hoveredObject = null; });
+  el.addEventListener('pointerdown', (event) => dragTableObject(event, el, object));
   return el;
 }
 
@@ -299,6 +333,27 @@ function dragTableCard(event, el, card) {
   el.addEventListener('pointermove', move); el.addEventListener('pointerup', up, { once: true }); el.addEventListener('pointercancel', cancel, { once: true });
 }
 
+function dragTableObject(event, el, object) {
+  if (event.button !== 0) return;
+  event.preventDefault(); markLocalSelection(el); el.setPointerCapture(event.pointerId);
+  const start = { x: event.clientX, y: event.clientY };
+  let dragging = false;
+  const move = (e) => {
+    if (!dragging && Math.hypot(e.clientX - start.x, e.clientY - start.y) < 5) return;
+    dragging = true; hoveredObject = null;
+    const position = tablePosition(e.clientX, e.clientY);
+    el.style.left = `${position.x}%`; el.style.top = `${position.y}%`; el.dataset.x = position.x; el.dataset.y = position.y;
+  };
+  const finish = (e, cancelled = false) => {
+    el.removeEventListener('pointermove', move); el.removeEventListener('pointerup', up); el.removeEventListener('pointercancel', cancel);
+    if (cancelled) { render(); return; }
+    if (dragging) action('moveObject', { objectId: object.id, x: Number(el.dataset.x) || object.x, y: Number(el.dataset.y) || object.y });
+    else action('select', { cardId: object.id });
+  };
+  const up = (e) => finish(e), cancel = (e) => finish(e, true);
+  el.addEventListener('pointermove', move); el.addEventListener('pointerup', up, { once: true }); el.addEventListener('pointercancel', cancel, { once: true });
+}
+
 function findStackTarget(x, y, source = null) {
   for (const node of document.elementsFromPoint(x, y)) {
     const card = node.closest?.('.table-card');
@@ -343,6 +398,11 @@ function cardKeyDown(event) {
     const cardId = hoveredCard.card.id;
     hoveredCard = null; hideCardZoom();
     action('flip', { cardId });
+  }
+  if (key === 's' && hoveredObject?.object.type === 'die' && !event.repeat) {
+    event.preventDefault();
+    const objectId = hoveredObject.object.id; hoveredObject = null;
+    action('rollDie', { objectId }); return;
   }
   if (key === 's' && hoveredCard?.zone === 'table' && !event.repeat) {
     event.preventDefault();
@@ -407,7 +467,7 @@ function clearLocalSelection() {
 }
 
 function clearSelectionFromTable(event) {
-  if (event.target.closest('.card,.deck-zone')) return;
+  if (event.target.closest('.card,.table-object,.deck-zone')) return;
   clearSelection();
 }
 
@@ -424,6 +484,45 @@ function submitDeal(event) {
   const cardId = pendingDealCardId; pendingDealCardId = '';
   $('#deal-dialog').close();
   action('dealStack', { cardId, countEach: Number($('#deal-count').value), destination: $('#deal-destination').value, faceUp: $('#deal-facing').value === 'up' });
+}
+
+function createDie(event) {
+  event.preventDefault(); $('#dice-dialog').close(); clearLocalSelection();
+  action('createDie', { sides: Number($('#die-sides').value), color: $('#die-color').value });
+}
+
+function ownSelection() { return (state?.selections || []).find(([id]) => id === playerId)?.[1] || ''; }
+
+function destroySelectedObject() {
+  const objectId = ownSelection();
+  if (!objectId) return toast('Select a card, stack, or die first', true);
+  action('destroy', { objectId });
+}
+
+function openBackgroundDialog() {
+  if (role !== 'host') return toast('Only the host can change the background', true);
+  $('#background-url').value = state?.background || ''; $('#background-file').value = ''; $('#background-status').textContent = '';
+  $('#background-dialog').showModal();
+}
+
+async function applyBackground(event) {
+  event.preventDefault();
+  const status = $('#background-status'), file = $('#background-file').files[0];
+  try {
+    let url = $('#background-url').value.trim();
+    if (file) {
+      if (file.size > 12 * 1024 * 1024) throw new Error('The background image must be 12 MB or smaller.');
+      const uploaded = await relay.upload(file, (progress, attempt) => { status.textContent = `Uploading background… ${Math.round(progress * 100)}%${attempt > 1 ? ` (retry ${attempt})` : ''}`; });
+      url = uploaded.url;
+    }
+    if (!url) throw new Error('Choose an image or enter an HTTPS image URL.');
+    action('background', { url }); $('#background-dialog').close(); status.textContent = '';
+  } catch (error) { status.textContent = error.message; }
+}
+
+function removeBackground() {
+  if (role !== 'host') return;
+  action('background', { url: '' }); $('#background-dialog').close();
 }
 
 function isTyping(target) { return target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target?.isContentEditable; }
@@ -504,6 +603,7 @@ function codeFromUrl() { return new URLSearchParams(location.search).get('room')
 function networkError(error) { toast(`Relay error: ${error.message}`, true); }
 function imageDimensions(file) { return new Promise((resolve, reject) => { const image = new Image(), url = URL.createObjectURL(file); image.onload = () => { resolve({ width: image.naturalWidth, height: image.naturalHeight }); URL.revokeObjectURL(url); }; image.onerror = () => { reject(new Error(`${file.name} is not a readable image.`)); URL.revokeObjectURL(url); }; image.src = url; }); }
 function fileSize(bytes) { return bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB` : `${Math.ceil(bytes / 1024)} KB`; }
+function contrastColor(hex) { const value = String(hex || '').replace('#', ''); const rgb = Number.parseInt(value, 16); return (((rgb >> 16) * 299 + ((rgb >> 8) & 255) * 587 + (rgb & 255) * 114) / 1000) > 145 ? '#171b18' : '#fffdf8'; }
 function initials(name) { return String(name || '?').split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase(); }
 function randomCode() { return crypto.getRandomValues(new Uint32Array(2)).join('-'); }
 function cssUrl(value) { return String(value || '').replace(/["\\\n\r]/g, (char) => `\\${char}`); }

@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#171b18">
   <title>LPTTS — Lightweight card table</title>
   <meta name="description" content="A fast, private-hand 2D multiplayer card table with Tabletop Simulator deck import.">
-  <link rel="stylesheet" href="./styles.css?v=11">
+  <link rel="stylesheet" href="./styles.css?v=12">
 </head>
 <body>
   <div id="lobby" class="lobby">
@@ -48,7 +48,9 @@
         <div class="felt-noise"></div>
         <div id="empty-table" class="empty-table"><div class="empty-stack"><i></i><i></i><i></i></div><h2>The table is clear</h2><p>Import a deck, draw a card, or drag one here from your hand.</p></div>
         <div id="table-cards"></div>
+        <div id="table-objects"></div>
         <div class="deck-zone">
+          <div class="object-tools"><button id="background-button" class="object-tool" title="Set table background" aria-label="Set table background"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5h18v14H3zM3 16l5-5 4 4 3-3 6 6M16.5 9a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3z"/></svg></button><button id="add-die" class="object-tool" title="Add a die" aria-label="Add a die"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="3"/><circle cx="8" cy="8" r="1"/><circle cx="16" cy="8" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="8" cy="16" r="1"/><circle cx="16" cy="16" r="1"/></svg></button><button id="trash-object" class="object-tool trash-tool" title="Delete selected object" aria-label="Delete selected object" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3m3 0-1 13H7L6 7m4 4v5m4-5v5"/></svg></button></div>
           <button id="deck" class="deck" disabled><span class="deck-count">0</span></button>
           <div><strong>Draw pile</strong><span id="deck-label">No deck</span></div>
           <button id="shuffle" class="small-button" disabled>Shuffle</button>
@@ -90,8 +92,10 @@
 
   </dialog>
   <dialog id="image-deck-dialog" class="image-deck-dialog"><button class="dialog-close" data-close="image-deck-dialog">×</button><p class="eyebrow">Local artwork</p><h2>Create image deck</h2><p>Select a face sheet containing a grid of cards and one card-back image.</p><form id="image-deck-form"><label>Deck name<input id="deck-name" maxlength="60" value="Custom deck"></label><label>Front sheet image<input id="face-file" type="file" accept="image/png,image/jpeg,image/webp" required></label><label>Back image<input id="back-file" type="file" accept="image/png,image/jpeg,image/webp" required></label><div class="deck-grid-fields"><label>Columns<input id="deck-columns" type="number" min="1" max="20" value="7" required></label><label>Rows<input id="deck-rows" type="number" min="1" max="20" value="7" required></label><label>Cards<input id="deck-card-count" type="number" min="1" max="400" value="43" required></label></div><div id="image-summary" class="image-summary">Choose the front and back images.</div><button class="primary" type="submit">Create deck <b>→</b></button></form><p id="image-deck-status" class="status"></p></dialog>
+  <dialog id="background-dialog" class="background-dialog"><button class="dialog-close" data-close="background-dialog">×</button><p class="eyebrow">Table appearance</p><h2>Set background image</h2><p>Upload an image or provide a direct HTTPS image URL. Only the host can change the background.</p><form id="background-form"><label>Image from device<input id="background-file" type="file" accept="image/png,image/jpeg,image/webp"></label><div class="dialog-or">or</div><label>Image URL<input id="background-url" type="url" maxlength="2048" placeholder="https://example.com/table.jpg"></label><button class="primary" type="submit">Apply background <b>→</b></button><button id="remove-background" class="demo" type="button">Remove background</button></form><p id="background-status" class="status"></p></dialog>
+  <dialog id="dice-dialog" class="dice-dialog"><button class="dialog-close" data-close="dice-dialog">×</button><p class="eyebrow">Table object</p><h2>Add a die</h2><form id="dice-form"><label>Die type<select id="die-sides"><option value="4">D4</option><option value="6" selected>D6</option><option value="8">D8</option><option value="10">D10</option><option value="12">D12</option><option value="20">D20</option><option value="100">D100</option></select></label><label>Die color<input id="die-color" type="color" value="#f4f0e6"></label><button class="primary" type="submit">Place die <b>→</b></button></form></dialog>
   <dialog id="deal-dialog" class="deal-dialog"><button class="dialog-close" data-close="deal-dialog">×</button><p class="eyebrow">Deal stack</p><h2>Deal to every player</h2><p id="deal-summary"></p><form id="deal-form"><label>Cards per player<input id="deal-count" type="number" min="1" value="1" required></label><label>Destination<select id="deal-destination"><option value="hand">Player’s hand</option><option value="table">In front of the player</option></select></label><label>Card orientation<select id="deal-facing"><option value="down">Face down</option><option value="up">Face up</option></select></label><button class="primary" type="submit">Deal cards <b>→</b></button></form></dialog>
-  <dialog id="help-dialog"><button class="dialog-close" data-close="help-dialog" autofocus>×</button><p class="eyebrow">Quick guide</p><h2>Welcome to the table</h2><ul><li>The host shares the six-character table code or invite link.</li><li>Players join through the relay, with no connection-code exchange or network setup.</li><li>Import a Tabletop Simulator save or saved-object JSON file.</li><li>Click the draw pile to add a private card to your hand.</li><li>Hover over a card and hold Z to zoom it. Press F to flip it.</li><li>Drag a card or stack directly onto another card to combine them.</li><li>Hover over a stack and press S to shuffle it or D to deal it.</li><li>Drag table cards to arrange them or drop the top card on your hand to take it back.</li><li>Clicking a card marks it with your player color; click empty table space to clear it.</li><li>Use the chat button in the header; chat can be minimized at any time.</li></ul></dialog>
+  <dialog id="help-dialog"><button class="dialog-close" data-close="help-dialog" autofocus>×</button><p class="eyebrow">Quick guide</p><h2>Welcome to the table</h2><ul><li>The host shares the six-character table code or invite link.</li><li>Players join through the relay, with no connection-code exchange or network setup.</li><li>Import a Tabletop Simulator save or saved-object JSON file.</li><li>Click the draw pile to add a private card to your hand.</li><li>Hover over a card and hold Z to zoom it. Press F to flip it.</li><li>Drag a card or stack directly onto another card to combine them.</li><li>Hover over a stack and press S to shuffle it or D to deal it.</li><li>Add dice beside the draw pile; hover over a die and press S to roll it.</li><li>Select a card, stack, or die and use the trash icon to destroy it.</li><li>Clicking an object marks it with your player color; click empty table space to clear it.</li><li>Use the chat button in the header; chat can be minimized at any time.</li></ul></dialog>
   <script>
     window.setTimeout(function () {
       if (!window.lpttsReady) {
@@ -100,6 +104,6 @@
       }
     }, 2500);
   </script>
-  <script type="module" src="./js/app.js?v=16" onerror="document.getElementById('lobby-status').textContent='The app script failed to load. Please reload the page.'"></script>
+  <script type="module" src="./js/app.js?v=17" onerror="document.getElementById('lobby-status').textContent='The app script failed to load. Please reload the page.'"></script>
 </body>
 </html>
