@@ -99,9 +99,11 @@ export class GameRoom {
   }
 
   move(playerId, cardId, x, y) {
-    const card = this.table.find((item) => item.id === cardId);
-    if (!card) throw new Error('Card not found.');
+    const index = this.table.findIndex((item) => item.id === cardId);
+    if (index < 0) throw new Error('Card not found.');
+    const [card] = this.table.splice(index, 1);
     card.x = clamp(x); card.y = clamp(y);
+    this.table.push(card);
     this.select(playerId, cardId, card.stack?.length ? 'stack' : 'top');
   }
 
@@ -265,6 +267,7 @@ export class GameRoom {
     if (!anchor) throw new Error('Selected object is no longer on the table.');
     const dx = clamp(x) - anchor.x, dy = clamp(y) - anchor.y, selected = new Set(ids);
     this.table.forEach((card) => { if (selected.has(card.id)) { card.x = clamp(card.x + dx); card.y = clamp(card.y + dy); } });
+    this.table = [...this.table.filter(({ id }) => !selected.has(id)), ...this.table.filter(({ id }) => selected.has(id))];
     this.objects.forEach((object) => {
       if (!selected.has(object.id)) return;
       object.x = clamp(object.x + dx); object.y = clamp(object.y + dy);

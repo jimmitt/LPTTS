@@ -1,4 +1,4 @@
-import { GameRoom } from './game.js?v=8';
+import { GameRoom } from './game.js?v=9';
 import { parseTtsDeck } from './tts.js';
 import { createImageDeck } from './image-deck.js?v=2';
 import { createStandardDeck } from './standard-deck.js?v=1';
