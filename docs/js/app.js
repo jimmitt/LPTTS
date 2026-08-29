@@ -1,4 +1,4 @@
-import { GameRoom } from './game.js?v=10';
+import { GameRoom } from './game.js?v=11';
 import { parseTtsDeck } from './tts.js';
 import { createImageDeck } from './image-deck.js?v=2';
 import { createStandardDeck } from './standard-deck.js?v=1';
@@ -18,6 +18,8 @@ let hoveredCard = null, hoveredObject = null, zoomHeld = false;
 let pendingDealCardId = '';
 let tableZoom = 1, tablePanX = 0, tablePanY = 0;
 let localSelectionIds = [];
+let lastFanCardId = '';
+const trashSelectionIds = new Set();
 const remotePlayers = new Set();
 const seenChat = new Set();
 const HOST_STATE_KEY = 'lptts-host-state-v1';
@@ -51,7 +53,8 @@ $('#deal-form').addEventListener('submit', submitDeal);
 $('#add-die').addEventListener('click', () => $('#dice-dialog').showModal());
 $('#dice-form').addEventListener('submit', createDie);
 $('#trash-object').addEventListener('click', useTrash);
-$('#trash-items').addEventListener('click', restoreTrashItem);
+$('#trash-items').addEventListener('click', toggleTrashItem);
+$('#restore-trash-selected').addEventListener('click', restoreSelectedTrash);
 $('#background-button').addEventListener('click', openBackgroundDialog);
 $('#background-form').addEventListener('submit', applyBackground);
 $('#remove-background').addEventListener('click', removeBackground);
@@ -161,6 +164,7 @@ function applyHostAction(actor, type, body) {
     else if (type === 'stackTop') room.stackTop(actor, body.sourceId, body.targetId);
     else if (type === 'shuffleStack') room.shuffleStack(actor, body.cardId);
     else if (type === 'spreadStack') room.spreadStack(actor, body.cardId, body.direction, body.spacing);
+    else if (type === 'cycleStackLayout') room.cycleStackLayout(actor, body.cardId, body.horizontalSpacing, body.verticalSpacing);
     else if (type === 'dealStack') room.dealStack(actor, body.cardId, body.countEach, body.destination, body.faceUp);
     else if (type === 'createDie') room.createDie(actor, body.sides, body.color);
     else if (type === 'moveObject') room.moveObject(actor, body.objectId, body.x, body.y, body.roll);
@@ -169,7 +173,10 @@ function applyHostAction(actor, type, body) {
     else if (type === 'rollDice') room.rollDice(actor, body.objectIds);
     else if (type === 'nextTurn') room.nextTurn(actor);
     else if (type === 'destroy') room.destroy(actor, body.objectId, body.scope || 'top');
+    else if (type === 'destroyMany') room.destroyMany(actor, body.objectIds);
     else if (type === 'restoreTrash') room.restoreTrash(actor, body.trashId);
+    else if (type === 'restoreTrashMany') room.restoreTrashMany(actor, body.trashIds);
+    else if (type === 'stackSelection') room.stackSelection(actor, body.sourceIds, body.targetId);
     else if (type === 'background') {
       if (actor !== playerId) throw new Error('Only the host can change the table background.');
       room.setBackground(actor, body.url);
@@ -254,8 +261,8 @@ function render() {
   ui.tableCards.replaceChildren(...state.table.map(tableCard));
   ui.tableObjects.replaceChildren(...(state.objects || []).map(tableObject));
   ui.empty.hidden = state.table.length > 0 || (state.objects || []).length > 0;
-  const selected = ownSelection(), trash = $('#trash-object'); trash.disabled = false;
-  trash.title = selected.objectId ? (selected.scope === 'stack' ? 'Delete selected stack' : 'Delete selected object') : `Open trash (${state.trash?.length || 0})`;
+  const selectedIds = ownSelectionIds(), selected = ownSelection(), trash = $('#trash-object'); trash.disabled = false;
+  trash.title = selectedIds.length > 1 ? `Delete ${selectedIds.length} selected items` : selected.objectId ? (selected.scope === 'stack' ? 'Delete selected stack' : 'Delete selected object') : `Open trash (${state.trash?.length || 0})`;
   trash.setAttribute('aria-label', trash.title);
   if ($('#trash-dialog').open) renderTrashDialog();
 }
@@ -276,7 +283,7 @@ function tableCard(card, index) {
   el.style.transform = `translate(-50%,-50%) rotate(${card.rotation || 0}deg)`;
   el.dataset.cardId = card.id; el.dataset.x = card.x; el.dataset.y = card.y; applyCardSelection(el, card.id);
   const count = 1 + (card.stack?.length || 0);
-  el.title = count > 1 ? `${count}-card stack · O vertical · Shift+O horizontal · S shuffle · D deal · Left-drag top · Right-drag stack` : 'Overlap another card by more than 85% to stack · H take · Z zoom · F flip';
+  el.title = count > 1 ? `${count}-card stack · O cycle layout · S shuffle · D deal · Left-drag top · Right-drag stack` : 'Overlap another card by more than 85% to stack · H take · Z zoom · F flip';
   if (count > 1) { el.classList.add('card-stack'); const badge = document.createElement('span'); badge.className = 'stack-count'; badge.textContent = count; el.append(badge); }
   bindCardKeys(el, card, card.faceUp, 'table');
   el.addEventListener('dblclick', () => action('flip', { cardId: card.id }));
@@ -402,7 +409,9 @@ function dragSelectedGroup(event, anchorElement, anchor) {
     item,
     element: document.querySelector(`[data-card-id="${CSS.escape(item.id)}"], [data-object-id="${CSS.escape(item.id)}"]`)
   }));
-  let dragging = false;
+  const selectedElements = new Set(entries.map(({ element }) => element).filter(Boolean));
+  const cardsOnly = entries.length > 0 && entries.every(({ item }) => (state.table || []).some(({ id }) => id === item.id));
+  let dragging = false, stackTarget;
   const move = (e) => {
     if (!dragging && Math.hypot(e.clientX - start.x, e.clientY - start.y) < 5) return;
     dragging = true; hoveredCard = null; hoveredObject = null; hideCardZoom();
@@ -413,11 +422,16 @@ function dragSelectedGroup(event, anchorElement, anchor) {
       element.style.left = `${x}%`; element.style.top = `${y}%`; element.dataset.x = x; element.dataset.y = y;
     });
     anchorElement.dataset.x = position.x; anchorElement.dataset.y = position.y;
+    stackTarget?.classList.remove('stack-target'); stackTarget = cardsOnly ? findStackTarget(anchorElement, selectedElements) : null;
+    if (stackTarget && !stackTarget.classList.contains('card-stack')) stackTarget = null;
+    stackTarget?.classList.add('stack-target');
   };
   const finish = (e, cancelled = false) => {
     anchorElement.removeEventListener('pointermove', move); anchorElement.removeEventListener('pointerup', up); anchorElement.removeEventListener('pointercancel', cancel);
+    stackTarget?.classList.remove('stack-target');
     if (cancelled) return render();
-    if (dragging) action('moveSelection', { anchorId: anchor.id, x: Number(anchorElement.dataset.x) || anchor.x, y: Number(anchorElement.dataset.y) || anchor.y, rollDice: event.button === 2, objectIds: ids });
+    if (dragging && stackTarget) action('stackSelection', { sourceIds: ids, targetId: stackTarget.dataset.cardId });
+    else if (dragging) action('moveSelection', { anchorId: anchor.id, x: Number(anchorElement.dataset.x) || anchor.x, y: Number(anchorElement.dataset.y) || anchor.y, rollDice: event.button === 2, objectIds: ids });
   };
   const up = (e) => finish(e), cancel = (e) => finish(e, true);
   anchorElement.addEventListener('pointermove', move); anchorElement.addEventListener('pointerup', up, { once: true }); anchorElement.addEventListener('pointercancel', cancel, { once: true });
@@ -429,7 +443,7 @@ function findStackTarget(movingCard, excluded = null) {
   if (!sourceArea) return null;
   const cards = [...ui.tableCards.querySelectorAll('.table-card')].reverse();
   for (const card of cards) {
-    if (card === movingCard || card === excluded) continue;
+    if (card === movingCard || card === excluded || (excluded instanceof Set && excluded.has(card))) continue;
     const target = card.getBoundingClientRect();
     const width = Math.max(0, Math.min(source.right, target.right) - Math.max(source.left, target.left));
     const height = Math.max(0, Math.min(source.bottom, target.bottom) - Math.max(source.top, target.top));
@@ -523,6 +537,9 @@ function bindCardKeys(element, card, faceUp, zone) {
 function cardKeyDown(event) {
   if (isTyping(event.target)) return;
   const key = event.key.toLowerCase();
+  if (event.key === 'Delete' && !event.repeat) {
+    event.preventDefault(); deleteSelectedItems(); return;
+  }
   if (key === 'z' && hoveredCard) {
     event.preventDefault(); zoomHeld = true; showCardZoom();
   }
@@ -559,13 +576,14 @@ function cardKeyDown(event) {
     if (!hoveredCard.card.stack?.length) return toast('Only a stack can be dealt', true);
     openDealDialog(hoveredCard.card);
   }
-  if (key === 'o' && hoveredCard?.zone === 'table' && !event.repeat) {
+  if (key === 'o' && !event.repeat) {
+    const target = hoveredCard?.zone === 'table' ? hoveredCard.card : state?.table?.find(({ id }) => id === lastFanCardId);
+    const element = hoveredCard?.zone === 'table' ? hoveredCard.element : target ? document.querySelector(`[data-card-id="${CSS.escape(target.id)}"]`) : null;
+    if (!target || (!target.stack?.length && !target.fanId) || !element) return;
     event.preventDefault();
-    if (!hoveredCard.card.stack?.length) return toast('Only a stack can be laid out', true);
-    const direction = event.shiftKey ? 'horizontal' : 'vertical', cardBox = hoveredCard.element.getBoundingClientRect(), surfaceBox = ui.tableSurface.getBoundingClientRect();
-    const spacing = direction === 'vertical' ? cardBox.height / surfaceBox.height * 20 : cardBox.width / surfaceBox.width * 20;
-    const cardId = hoveredCard.card.id; hoveredCard = null; hideCardZoom();
-    action('spreadStack', { cardId, direction, spacing });
+    const cardBox = element.getBoundingClientRect(), surfaceBox = ui.tableSurface.getBoundingClientRect();
+    lastFanCardId = target.id; hoveredCard = null; hideCardZoom();
+    action('cycleStackLayout', { cardId: target.id, horizontalSpacing: cardBox.width / surfaceBox.width * 20, verticalSpacing: cardBox.height / surfaceBox.height * 20 });
   }
 }
 
@@ -679,30 +697,49 @@ function ownSelectionIds() {
 }
 
 function useTrash() {
-  const { objectId, scope } = ownSelection();
-  if (!objectId) { renderTrashDialog(); $('#trash-dialog').showModal(); return; }
-  action('destroy', { objectId, scope });
+  if (!ownSelectionIds().length) { trashSelectionIds.clear(); renderTrashDialog(); $('#trash-dialog').showModal(); return; }
+  deleteSelectedItems();
+}
+
+function deleteSelectedItems() {
+  const ids = ownSelectionIds(), { objectId, scope } = ownSelection();
+  if (!ids.length) return;
+  clearLocalSelection();
+  if (ids.length > 1) action('destroyMany', { objectIds: ids });
+  else action('destroy', { objectId, scope });
 }
 
 function renderTrashDialog() {
   const list = $('#trash-items'), entries = state?.trash || [];
+  const available = new Set(entries.map(({ trashId }) => trashId)); for (const id of trashSelectionIds) if (!available.has(id)) trashSelectionIds.delete(id);
   $('#trash-summary').textContent = entries.length ? `${entries.length} deleted item${entries.length === 1 ? '' : 's'}` : 'Deleted items will appear here.';
+  $('#restore-trash-selected').disabled = !trashSelectionIds.size;
   if (!entries.length) { const empty = document.createElement('p'); empty.className = 'trash-empty'; empty.textContent = 'The trash is empty.'; list.replaceChildren(empty); return; }
   list.replaceChildren(...entries.map((entry) => {
-    const row = document.createElement('div'); row.className = 'trash-item';
-    const icon = document.createElement('span'); icon.className = 'trash-preview'; icon.textContent = entry.kind === 'object' ? '⚄' : (entry.count > 1 ? '▥' : '▯');
-    const copy = document.createElement('span'), name = document.createElement('strong'), detail = document.createElement('small');
-    name.textContent = entry.label || 'Deleted item'; detail.textContent = entry.private ? 'Private hand card' : (entry.kind === 'object' ? 'Die' : entry.count > 1 ? `${entry.count}-card stack` : entry.zone === 'hand' ? 'Hand card' : 'Table card');
-    copy.append(name, detail);
-    const restore = document.createElement('button'); restore.type = 'button'; restore.dataset.restoreTrash = entry.trashId; restore.textContent = 'Restore';
-    row.append(icon, copy, restore); return row;
+    const tile = document.createElement('button'); tile.type = 'button'; tile.className = `trash-item${trashSelectionIds.has(entry.trashId) ? ' selected' : ''}`; tile.dataset.trashId = entry.trashId; tile.setAttribute('aria-pressed', String(trashSelectionIds.has(entry.trashId)));
+    const preview = trashItemPreview(entry), name = document.createElement('strong'); name.textContent = entry.label || 'Deleted item';
+    tile.append(preview, name); return tile;
   }));
 }
 
-function restoreTrashItem(event) {
-  const button = event.target.closest('[data-restore-trash]');
-  if (!button) return;
-  button.disabled = true; action('restoreTrash', { trashId: button.dataset.restoreTrash });
+function trashItemPreview(entry) {
+  if (entry.kind === 'card') {
+    const preview = entry.private || !entry.item ? cardElement({}, false) : cardElement(entry.item, entry.item.faceUp !== false); preview.classList.add('trash-card-preview');
+    if (entry.count > 1) { preview.classList.add('card-stack'); const badge = document.createElement('span'); badge.className = 'trash-stack-count'; badge.textContent = entry.count; preview.append(badge); }
+    return preview;
+  }
+  const preview = document.createElement('span'); preview.className = 'trash-object-preview'; preview.textContent = entry.item?.type === 'die' ? `D${entry.item.sides}\n${entry.item.value}` : 'Object'; return preview;
+}
+
+function toggleTrashItem(event) {
+  const tile = event.target.closest('[data-trash-id]'); if (!tile) return;
+  if (trashSelectionIds.has(tile.dataset.trashId)) trashSelectionIds.delete(tile.dataset.trashId); else trashSelectionIds.add(tile.dataset.trashId);
+  renderTrashDialog();
+}
+
+function restoreSelectedTrash() {
+  const trashIds = [...trashSelectionIds]; if (!trashIds.length) return;
+  $('#restore-trash-selected').disabled = true; action('restoreTrashMany', { trashIds });
 }
 
 function openBackgroundDialog() {

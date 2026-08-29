@@ -169,7 +169,19 @@ async function runConnectionTest() {
     await guest.keyboard.press('o');
     await guest.waitForFunction(() => document.querySelector('#table-cards')?.children.length === 2 && !document.querySelector('.stack-count'));
     let layout = await guest.locator('#table-cards .card').evaluateAll((cards) => cards.map((card) => card.getBoundingClientRect().toJSON()));
-    if (Math.abs(layout[0].x - layout[1].x) > 3 || Math.abs(layout[0].y - layout[1].y) < 15) throw new Error('O did not lay the stack out vertically.');
+    if (Math.abs(layout[0].x - layout[1].x) > 3 || layout[1].y <= layout[0].y + 15) throw new Error('First O did not fan the stack down.');
+    await guest.keyboard.press('o');
+    await guest.waitForTimeout(150);
+    layout = await guest.locator('#table-cards .card').evaluateAll((cards) => cards.map((card) => card.getBoundingClientRect().toJSON()));
+    if (Math.abs(layout[0].y - layout[1].y) > 3 || layout[1].x >= layout[0].x - 10) throw new Error('Second O did not fan the stack left.');
+    await guest.keyboard.press('o');
+    await guest.waitForTimeout(150);
+    layout = await guest.locator('#table-cards .card').evaluateAll((cards) => cards.map((card) => card.getBoundingClientRect().toJSON()));
+    if (Math.abs(layout[0].x - layout[1].x) > 3 || layout[1].y >= layout[0].y - 15) throw new Error('Third O did not fan the stack up.');
+    await guest.keyboard.press('o');
+    await guest.waitForTimeout(150);
+    layout = await guest.locator('#table-cards .card').evaluateAll((cards) => cards.map((card) => card.getBoundingClientRect().toJSON()));
+    if (Math.abs(layout[0].y - layout[1].y) > 3 || layout[1].x <= layout[0].x + 10) throw new Error('Fourth O did not fan the stack right.');
     const cascadeTop = layout[1];
     await guest.mouse.move(cascadeTop.x + cascadeTop.width / 2, cascadeTop.y + cascadeTop.height / 2);
     await guest.mouse.down();
@@ -179,16 +191,11 @@ async function runConnectionTest() {
     await guest.waitForTimeout(150);
     if (await guest.locator('#table-cards .card').count() !== 2) throw new Error('Cards stacked with only about 80% overlap.');
     layout = await guest.locator('#table-cards .card').evaluateAll((cards) => cards.map((card) => card.getBoundingClientRect().toJSON()).sort((a, b) => a.y - b.y));
-    await guest.mouse.move(layout[0].x + layout[0].width / 2, layout[0].y + layout[0].height / 2);
+    await guest.mouse.move(layout[1].x + layout[1].width / 2, layout[1].y + layout[1].height / 2);
     await guest.mouse.down();
-    await guest.mouse.move(layout[1].x + layout[1].width / 2, layout[1].y + layout[1].height / 2, { steps: 8 });
+    await guest.mouse.move(layout[0].x + layout[0].width / 2, layout[0].y + layout[0].height / 2, { steps: 8 });
     await guest.mouse.up();
     await guest.waitForFunction(() => document.querySelector('.stack-count')?.textContent === '2');
-    await guest.locator('#table-cards .card-stack').hover();
-    await guest.keyboard.press('Shift+o');
-    await guest.waitForFunction(() => document.querySelector('#table-cards')?.children.length === 2 && !document.querySelector('.stack-count'));
-    layout = await guest.locator('#table-cards .card').evaluateAll((cards) => cards.map((card) => card.getBoundingClientRect().toJSON()));
-    if (Math.abs(layout[0].y - layout[1].y) > 3 || Math.abs(layout[0].x - layout[1].x) < 10) throw new Error('Shift+O did not lay the stack out horizontally.');
 
     await host.click('#standard-deck-button');
     await guest.waitForFunction(() => [...document.querySelectorAll('.stack-count')].some((badge) => badge.textContent === '52'));
@@ -200,6 +207,31 @@ async function runConnectionTest() {
     await standardCard.hover();
     await guest.keyboard.press('f');
     await standardCard.locator('.standard-card-face').waitFor();
+
+    const importedStack = guest.locator('#table-cards .card-stack').filter({ has: guest.locator('.stack-count:text-is("2")') });
+    await importedStack.hover();
+    await guest.keyboard.press('o');
+    await guest.waitForFunction(() => document.querySelectorAll('#table-cards .card:not(.card-stack)').length === 2);
+    const fanBounds = await guest.locator('#table-cards .card:not(.card-stack)').evaluateAll((cards) => cards.map((card) => card.getBoundingClientRect().toJSON()));
+    const fanCenters = fanBounds.map((box) => ({ x: box.x + box.width / 2, y: box.y + box.height / 2 }));
+    await guest.keyboard.down('Control');
+    await guest.mouse.move(Math.min(...fanCenters.map(({ x }) => x)) - 5, Math.min(...fanCenters.map(({ y }) => y)) - 5);
+    await guest.mouse.down();
+    await guest.mouse.move(Math.max(...fanCenters.map(({ x }) => x)) + 5, Math.max(...fanCenters.map(({ y }) => y)) + 5, { steps: 8 });
+    await guest.mouse.up();
+    await guest.keyboard.up('Control');
+    await guest.waitForFunction(() => document.querySelectorAll('#table-cards .card.selected-card:not(.card-stack)').length === 2);
+    await guest.waitForTimeout(350);
+    const groupAnchor = await guest.locator('#table-cards .card.selected-card:not(.card-stack)').last().boundingBox();
+    const targetStack = guest.locator('#table-cards .card-stack');
+    const targetStackBox = await targetStack.boundingBox();
+    await guest.mouse.move(groupAnchor.x + groupAnchor.width / 2, groupAnchor.y + groupAnchor.height / 2);
+    await guest.mouse.down();
+    await guest.mouse.move(targetStackBox.x + targetStackBox.width / 2, targetStackBox.y + targetStackBox.height / 2, { steps: 10 });
+    await guest.mouse.up();
+    await guest.waitForTimeout(500);
+    const groupedStack = await guest.evaluate(() => ({ cards: document.querySelectorAll('#table-cards .card').length, counts: [...document.querySelectorAll('.stack-count')].map((item) => item.textContent), status: document.querySelector('#toast')?.textContent, boxes: [...document.querySelectorAll('#table-cards .card')].map((item) => ({ selected: item.classList.contains('selected-card'), stack: item.classList.contains('card-stack'), box: item.getBoundingClientRect().toJSON() })) }));
+    if (groupedStack.cards !== 1 || !groupedStack.counts.includes('53')) throw new Error(`Selected card group did not join the target stack: ${JSON.stringify(groupedStack)}`);
 
     await host.evaluate(() => { Math.random = () => .99; });
     await host.click('#add-die');
@@ -255,19 +287,45 @@ async function runConnectionTest() {
     const groupAfter = await guest.locator('.die').evaluateAll((dice) => dice.map((die) => die.getBoundingClientRect().toJSON()));
     if (groupAfter.some((box, index) => Math.abs((box.x - groupBefore[index].x) - 55) > 8)) throw new Error('Right-drag did not move the selected dice together.');
 
-    await guest.mouse.click(tableBox.x + 12, tableBox.y + 12);
-    await guest.waitForFunction(() => document.querySelector('#trash-object')?.title.startsWith('Open trash'));
-    const deleteDieBox = await guest.locator('.die').first().boundingBox();
-    await guest.mouse.click(deleteDieBox.x + deleteDieBox.width / 2, deleteDieBox.y + deleteDieBox.height / 2);
-    await guest.waitForFunction(() => document.querySelector('#trash-object')?.title === 'Delete selected object');
     await guest.click('#trash-object');
-    await guest.waitForFunction(() => document.querySelectorAll('.die').length === 1 && document.querySelector('#trash-object')?.title === 'Open trash (1)');
+    await guest.waitForFunction(() => document.querySelectorAll('.die').length === 0 && document.querySelector('#trash-object')?.title === 'Open trash (2)');
     await guest.click('#trash-object');
     await guest.waitForSelector('#trash-dialog[open] .trash-item');
-    const trashText = await guest.locator('#trash-dialog .trash-item').textContent();
-    if (!trashText.includes('D6')) throw new Error('Deleted die was not listed in the trash dialog.');
-    await guest.click('#trash-dialog [data-restore-trash]');
+    if (await guest.locator('#trash-dialog .trash-object-preview').count() !== 2) throw new Error('Deleted dice were not rendered graphically in the trash grid.');
+    await guest.locator('#trash-dialog .trash-item').first().click();
+    await guest.locator('#trash-dialog .trash-item').nth(1).click();
+    if (await guest.locator('#restore-trash-selected').isDisabled()) throw new Error('Trash selection did not enable batch restore.');
+    await guest.click('#restore-trash-selected');
     await guest.waitForFunction(() => document.querySelectorAll('.die').length === 2 && document.querySelector('.trash-empty'));
+    await guest.click('[data-close="trash-dialog"]');
+
+    const restoredDiceBounds = await guest.locator('.die').evaluateAll((dice) => dice.map((die) => die.getBoundingClientRect().toJSON()));
+    const restoredCenters = restoredDiceBounds.map((box) => ({ x: box.x + box.width / 2, y: box.y + box.height / 2 }));
+    await guest.keyboard.down('Control');
+    await guest.mouse.move(Math.min(...restoredCenters.map(({ x }) => x)) - 5, Math.min(...restoredCenters.map(({ y }) => y)) - 5);
+    await guest.mouse.down();
+    await guest.mouse.move(Math.max(...restoredCenters.map(({ x }) => x)) + 5, Math.max(...restoredCenters.map(({ y }) => y)) + 5, { steps: 8 });
+    await guest.mouse.up();
+    await guest.keyboard.up('Control');
+    await guest.waitForFunction(() => document.querySelectorAll('.die.selected-card').length === 2);
+    await guest.keyboard.press('Delete');
+    await guest.waitForFunction(() => document.querySelectorAll('.die').length === 0 && document.querySelector('#trash-object')?.title === 'Open trash (2)');
+    await guest.click('#trash-object');
+    await guest.locator('#trash-dialog .trash-item').first().click();
+    await guest.locator('#trash-dialog .trash-item').nth(1).click();
+    await guest.click('#restore-trash-selected');
+    await guest.waitForFunction(() => document.querySelectorAll('.die').length === 2 && document.querySelector('.trash-empty'));
+    await guest.click('[data-close="trash-dialog"]');
+
+    const cardStackBox = await guest.locator('#table-cards .card-stack').boundingBox();
+    await guest.mouse.click(cardStackBox.x + cardStackBox.width / 2, cardStackBox.y + cardStackBox.height / 2);
+    await guest.click('#trash-object');
+    await guest.waitForFunction(() => document.querySelector('.stack-count')?.textContent === '52' && document.querySelector('#trash-object')?.title === 'Open trash (1)');
+    await guest.click('#trash-object');
+    await guest.waitForSelector('#trash-dialog .trash-card-preview');
+    await guest.click('#trash-dialog .trash-item');
+    await guest.click('#restore-trash-selected');
+    await guest.waitForFunction(() => document.querySelector('.stack-count')?.textContent === '52' && document.querySelectorAll('#table-cards .card').length === 2 && document.querySelector('.trash-empty'));
     await guest.click('[data-close="trash-dialog"]');
 
     await guest.reload();
@@ -276,7 +334,7 @@ async function runConnectionTest() {
     await guest.click('#resume-button');
     await guest.waitForSelector('#game:not([hidden])');
     await guest.waitForFunction(() => document.querySelector('#hand-count')?.textContent === '2');
-    console.log('E2E passed: turns, stacking/layouts, dice/groups, recoverable trash, pan, chat, and resume');
+    console.log('E2E passed: turns, cyclic fans, group stacking/deletion, graphical trash restore, dice, pan, chat, and resume');
     await hostContext.close(); await guestContext.close();
   } finally {
     await browser.close(); await server.close();

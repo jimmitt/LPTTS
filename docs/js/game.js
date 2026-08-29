@@ -104,6 +104,8 @@ export class GameRoom {
     const index = this.table.findIndex((item) => item.id === cardId);
     if (index < 0) throw new Error('Card not found.');
     const [card] = this.table.splice(index, 1);
+    const fanId = card.fanId; clearFan(card);
+    if (fanId) this.normalizeFan(fanId);
     card.x = clamp(x); card.y = clamp(y);
     this.table.push(card);
     this.select(playerId, cardId, card.stack?.length ? 'stack' : 'top');
@@ -268,6 +270,12 @@ export class GameRoom {
     const items = [...this.table, ...this.objects], anchor = items.find(({ id }) => id === anchorId);
     if (!anchor) throw new Error('Selected object is no longer on the table.');
     const dx = clamp(x) - anchor.x, dy = clamp(y) - anchor.y, selected = new Set(ids);
+    const selectedFanIds = new Set(this.table.filter(({ id, fanId }) => selected.has(id) && fanId).map(({ fanId }) => fanId));
+    for (const fanId of selectedFanIds) {
+      const members = this.table.filter((card) => card.fanId === fanId);
+      if (members.every(({ id }) => selected.has(id))) members.forEach((card) => { card.fanOriginX = clamp(card.fanOriginX + dx); card.fanOriginY = clamp(card.fanOriginY + dy); });
+      else { members.filter(({ id }) => selected.has(id)).forEach(clearFan); this.normalizeFan(fanId); }
+    }
     this.table.forEach((card) => { if (selected.has(card.id)) { card.x = clamp(card.x + dx); card.y = clamp(card.y + dy); } });
     this.table = [...this.table.filter(({ id }) => !selected.has(id)), ...this.table.filter(({ id }) => selected.has(id))];
     this.objects.forEach((object) => {
@@ -311,6 +319,16 @@ export class GameRoom {
     throw new Error('Object is no longer available.');
   }
 
+  destroyMany(playerId, objectIds) {
+    if (!this.players.has(playerId)) throw new Error('Player not found.');
+    const ids = [...new Set(Array.isArray(objectIds) ? objectIds : [])];
+    if (!ids.length) throw new Error('Select at least one item.');
+    const available = new Set([...this.objects, ...this.table, ...this.players.get(playerId).hand].map(({ id }) => id));
+    if (ids.some((id) => !available.has(id))) throw new Error('A selected item is no longer available.');
+    ids.forEach((id) => this.destroy(playerId, id, 'stack'));
+    this.select(playerId, null);
+  }
+
   addTrash(entry) {
     this.trash.unshift({ trashId: crypto.randomUUID(), deletedAt: Date.now(), ...entry });
   }
@@ -331,6 +349,15 @@ export class GameRoom {
     }
     const restored = { ...item, x: clamp(item.x), y: clamp(item.y), rotation: item.rotation || 0 };
     this.table.push(restored); this.select(playerId, restored.id, restored.stack?.length ? 'stack' : 'top');
+  }
+
+  restoreTrashMany(playerId, trashIds) {
+    if (!this.players.has(playerId)) throw new Error('Player not found.');
+    const ids = [...new Set(Array.isArray(trashIds) ? trashIds : [])];
+    if (!ids.length) throw new Error('Select at least one deleted item.');
+    const available = new Set(this.trash.map(({ trashId }) => trashId));
+    if (ids.some((id) => !available.has(id))) throw new Error('A selected item is no longer in the trash.');
+    ids.forEach((trashId) => this.restoreTrash(playerId, trashId));
   }
 
   clearSelectionsFor(ids) {
@@ -364,6 +391,18 @@ export class GameRoom {
     const card = this.removeTopCard(sourceIndex);
     this.table.push({ ...card, x: source.x, y: source.y, rotation: source.rotation || 0 });
     this.stack(playerId, card.id, targetId); this.select(playerId, card.id, 'top');
+  }
+
+  stackSelection(playerId, sourceIds, targetId) {
+    if (!this.players.has(playerId)) throw new Error('Player not found.');
+    const selected = new Set(Array.isArray(sourceIds) ? sourceIds : []); selected.delete(targetId);
+    const targetIndex = this.table.findIndex(({ id }) => id === targetId);
+    const sources = this.table.filter(({ id }) => selected.has(id));
+    if (targetIndex < 0 || !sources.length || sources.length !== selected.size) throw new Error('Selected cards are no longer on the table.');
+    const target = this.table[targetIndex], cards = [...pileCards(target), ...sources.flatMap(pileCards)];
+    const removed = new Set([targetId, ...selected]);
+    this.table = [...this.table.filter(({ id }) => !removed.has(id)), makePile(cards, { x: target.x, y: target.y, rotation: target.rotation || 0 })];
+    this.select(playerId, this.table[this.table.length - 1].id, 'stack');
   }
 
   shuffleStack(playerId, cardId) {
@@ -422,6 +461,41 @@ export class GameRoom {
     this.select(playerId, laidOut[laidOut.length - 1].id, 'top');
   }
 
+  cycleStackLayout(playerId, cardId, horizontalSpacing, verticalSpacing) {
+    const current = this.table.find((card) => card.id === cardId);
+    if (!current) throw new Error('Stack is no longer on the table.');
+    let cards, fanId, originX, originY, direction, indexes;
+    const directions = ['down', 'left', 'up', 'right'];
+    if (current.stack?.length) {
+      cards = pileCards(current); fanId = crypto.randomUUID(); originX = current.x; originY = current.y; direction = 'down';
+      indexes = [this.table.indexOf(current)];
+    } else if (current.fanId) {
+      const members = this.table.filter((card) => card.fanId === current.fanId).sort((a, b) => a.fanIndex - b.fanIndex);
+      if (members.length < 2) throw new Error('Only a stack or fan can be laid out.');
+      cards = members.map(cleanCard); fanId = current.fanId; originX = current.fanOriginX; originY = current.fanOriginY;
+      direction = directions[(directions.indexOf(current.fanDirection) + 1) % directions.length];
+      indexes = members.map((member) => this.table.indexOf(member));
+    } else throw new Error('Only a stack or fan can be laid out.');
+    const horizontal = Math.max(.25, Math.min(20, Number(horizontalSpacing) || 2));
+    const vertical = Math.max(.25, Math.min(20, Number(verticalSpacing) || 4));
+    const axis = ['left', 'right'].includes(direction) ? 'x' : 'y', sign = ['right', 'down'].includes(direction) ? 1 : -1;
+    const origin = axis === 'x' ? originX : originY, available = sign > 0 ? 97 - origin : origin - 3;
+    const requested = axis === 'x' ? horizontal : vertical, step = Math.min(requested, Math.max(.25, available / (cards.length - 1)));
+    const laidOut = cards.map((card, index) => ({ ...cleanCard(card),
+      x: axis === 'x' ? clamp(originX + sign * step * index) : originX,
+      y: axis === 'y' ? clamp(originY + sign * step * index) : originY,
+      rotation: current.rotation || 0, fanId, fanIndex: index, fanDirection: direction, fanOriginX: originX, fanOriginY: originY
+    }));
+    const firstIndex = Math.min(...indexes), removed = new Set(indexes);
+    const next = this.table.filter((_, index) => !removed.has(index)); next.splice(firstIndex, 0, ...laidOut); this.table = next;
+    this.select(playerId, laidOut[laidOut.length - 1].id, 'top');
+  }
+
+  normalizeFan(fanId) {
+    const members = this.table.filter((card) => card.fanId === fanId);
+    if (members.length < 2) members.forEach(clearFan);
+  }
+
   removeTopCard(index) {
     const current = this.table[index], cards = pileCards(current), card = cards.pop();
     if (cards.length) this.table[index] = makePile(cards, { x: current.x, y: current.y, rotation: current.rotation || 0 });
@@ -456,7 +530,8 @@ export class GameRoom {
 function clamp(value) { return Math.max(3, Math.min(97, Number(value) || 50)); }
 function randomRoll(sides) { return Math.floor(Math.random() * sides) + 1; }
 function pileCards(card) { return [...(card.stack || []).map(cleanCard), cleanCard(card)]; }
-function cleanCard(card) { const { stack, x, y, rotation, ...clean } = card; return clean; }
+function cleanCard(card) { const { stack, x, y, rotation, fanId, fanIndex, fanDirection, fanOriginX, fanOriginY, ...clean } = card; return clean; }
+function clearFan(card) { delete card.fanId; delete card.fanIndex; delete card.fanDirection; delete card.fanOriginX; delete card.fanOriginY; }
 function makePile(cards, position) { const top = { ...cards[cards.length - 1], ...position }; if (cards.length > 1) top.stack = cards.slice(0, -1).map(cleanCard); return top; }
 function dealPosition(playerIndex, playerCount, round, count) {
   const angle = Math.PI / 2 + (Math.PI * 2 * playerIndex / playerCount);
