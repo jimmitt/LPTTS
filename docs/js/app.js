@@ -1,4 +1,4 @@
-import { GameRoom } from './game.js?v=7';
+import { GameRoom } from './game.js?v=8';
 import { parseTtsDeck } from './tts.js';
 import { createImageDeck } from './image-deck.js?v=2';
 import { createStandardDeck } from './standard-deck.js?v=1';
@@ -17,6 +17,7 @@ let savedRelay;
 let hoveredCard = null, hoveredObject = null, zoomHeld = false;
 let pendingDealCardId = '';
 let tableZoom = 1, tablePanX = 0, tablePanY = 0;
+let localSelectionIds = [];
 const remotePlayers = new Set();
 const seenChat = new Set();
 const HOST_STATE_KEY = 'lptts-host-state-v1';
@@ -35,12 +36,14 @@ document.querySelectorAll('[data-close]').forEach((button) => button.addEventLis
 $('#help').addEventListener('click', () => $('#help-dialog').showModal());
 $('#import-button').addEventListener('click', () => role === 'host' ? ui.file.click() : toast('Only the host can import a deck', true));
 $('#standard-deck-button').addEventListener('click', addStandardDeck);
+$('#end-turn').addEventListener('click', () => action('nextTurn'));
 $('#image-deck-button').addEventListener('click', () => role === 'host' ? $('#image-deck-dialog').showModal() : toast('Only the host can create a deck', true));
 $('#image-deck-form').addEventListener('submit', createUploadedDeck);
 $('#face-file').addEventListener('change', updateImageSummary);
 $('#back-file').addEventListener('change', updateImageSummary);
 ui.file.addEventListener('change', importDeck);
 $('#table').addEventListener('pointerdown', clearSelectionFromTable);
+$('#table').addEventListener('pointerdown', startBoxSelection);
 $('#table').addEventListener('mousedown', panTable);
 $('#table').addEventListener('auxclick', (event) => { if (event.button === 1) event.preventDefault(); });
 $('#table').addEventListener('wheel', zoomTable, { passive: false });
@@ -152,13 +155,18 @@ function applyHostAction(actor, type, body) {
     else if (type === 'move') room.move(actor, body.cardId, body.x, body.y);
     else if (type === 'moveTop') room.moveTop(actor, body.cardId, body.x, body.y);
     else if (type === 'select') room.select(actor, body.cardId || null, body.scope || 'top');
+    else if (type === 'selectMany') room.selectMany(actor, body.objectIds);
     else if (type === 'stack') room.stack(actor, body.sourceId, body.targetId);
     else if (type === 'stackTop') room.stackTop(actor, body.sourceId, body.targetId);
     else if (type === 'shuffleStack') room.shuffleStack(actor, body.cardId);
+    else if (type === 'spreadStack') room.spreadStack(actor, body.cardId, body.direction, body.spacing);
     else if (type === 'dealStack') room.dealStack(actor, body.cardId, body.countEach, body.destination, body.faceUp);
     else if (type === 'createDie') room.createDie(actor, body.sides, body.color);
-    else if (type === 'moveObject') room.moveObject(actor, body.objectId, body.x, body.y);
+    else if (type === 'moveObject') room.moveObject(actor, body.objectId, body.x, body.y, body.roll);
+    else if (type === 'moveSelection') room.moveSelection(actor, body.anchorId, body.x, body.y, body.rollDice, body.objectIds || []);
     else if (type === 'rollDie') room.rollDie(actor, body.objectId);
+    else if (type === 'rollDice') room.rollDice(actor, body.objectIds);
+    else if (type === 'nextTurn') room.nextTurn(actor);
     else if (type === 'destroy') room.destroy(actor, body.objectId, body.scope || 'top');
     else if (type === 'background') {
       if (actor !== playerId) throw new Error('Only the host can change the table background.');
@@ -222,15 +230,20 @@ async function updateImageSummary() {
 
 function render() {
   if (!state) return;
+  const authoritativeGroup = (state.selectionGroups || []).find(([id]) => id === playerId)?.[1];
+  const authoritativeSingle = (state.selections || []).find(([id]) => id === playerId)?.[1];
+  localSelectionIds = authoritativeGroup?.length ? [...authoritativeGroup] : (authoritativeSingle ? [authoritativeSingle] : []);
   const shareLabel = role === 'host' ? `Share table ${state.code}` : `Table code ${state.code}`;
   ui.connections.title = shareLabel; ui.connections.setAttribute('aria-label', shareLabel);
   ui.playerCount.textContent = state.players.length;
   ui.players.replaceChildren(...state.players.map((player) => {
-    const row = document.createElement('div'); row.className = 'player-row';
+    const row = document.createElement('div'); row.className = `player-row${player.id === state.currentTurn ? ' current-turn' : ''}`;
     const backs = Array.from({ length: Math.min(player.handCount, 5) }, () => '<i></i>').join('');
-    row.innerHTML = `<span class="avatar" style="background:${player.color}">${escapeHtml(initials(player.name))}</span><span class="player-name">${escapeHtml(player.name)}${player.id === playerId ? ' (you)' : ''}</span><span class="player-cards">${backs}<small>${player.handCount}</small></span>`;
+    row.innerHTML = `<span class="avatar" style="background:${player.color}">${escapeHtml(initials(player.name))}</span><span class="player-name">${escapeHtml(player.name)}${player.id === playerId ? ' (you)' : ''}</span><span class="player-cards">${backs}<small>${player.handCount}</small></span><span class="turn-indicator" title="Current turn" aria-label="Current turn"></span>`;
     return row;
   }));
+  const endTurn = $('#end-turn'), currentPlayer = state.players.find(({ id }) => id === state.currentTurn);
+  endTurn.disabled = state.currentTurn !== playerId; endTurn.title = endTurn.disabled ? `${currentPlayer?.name || 'Another player'} is taking a turn` : 'Finish your turn';
   const me = state.players.find((player) => player.id === playerId);
   ui.handCount.textContent = me?.handCount || 0;
   ui.hand.replaceChildren(...(me?.hand || []).map(handCard));
@@ -257,9 +270,9 @@ function tableCard(card, index) {
   const el = cardElement(card, card.faceUp);
   el.classList.add('table-card'); el.style.left = `${card.x}%`; el.style.top = `${card.y}%`; el.style.zIndex = index + 1;
   el.style.transform = `translate(-50%,-50%) rotate(${card.rotation || 0}deg)`;
-  el.dataset.cardId = card.id; applyCardSelection(el, card.id);
+  el.dataset.cardId = card.id; el.dataset.x = card.x; el.dataset.y = card.y; applyCardSelection(el, card.id);
   const count = 1 + (card.stack?.length || 0);
-  el.title = count > 1 ? `${count}-card stack · Left-drag top · Right-drag stack · S shuffle · D deal · H take top · Shift+F align` : 'Drag onto another card to stack · H take · Z zoom · F flip';
+  el.title = count > 1 ? `${count}-card stack · O vertical · Shift+O horizontal · S shuffle · D deal · Left-drag top · Right-drag stack` : 'Overlap another card by more than 85% to stack · H take · Z zoom · F flip';
   if (count > 1) { el.classList.add('card-stack'); const badge = document.createElement('span'); badge.className = 'stack-count'; badge.textContent = count; el.append(badge); }
   bindCardKeys(el, card, card.faceUp, 'table');
   el.addEventListener('dblclick', () => action('flip', { cardId: card.id }));
@@ -271,20 +284,24 @@ function tableCard(card, index) {
 function tableObject(object, index) {
   if (object.type !== 'die') return document.createDocumentFragment();
   const el = document.createElement('div'); el.className = 'table-object die';
-  el.dataset.objectId = object.id; el.style.left = `${object.x}%`; el.style.top = `${object.y}%`; el.style.zIndex = 1000 + index;
+  el.dataset.objectId = object.id; el.dataset.x = object.x; el.dataset.y = object.y; el.style.left = `${object.x}%`; el.style.top = `${object.y}%`; el.style.zIndex = 1000 + index;
   el.style.transform = `translate(-50%,-50%) rotate(${object.rotation || 0}deg)`; el.style.background = object.color;
-  el.style.color = contrastColor(object.color); el.title = `D${object.sides} · Hover and press S to roll`;
-  const value = document.createElement('strong'); value.textContent = object.value;
+  el.style.color = contrastColor(object.color); el.title = `D${object.sides} · S roll · Left-drag move · Right-drag move and roll`;
+  if (object.sides === 6) {
+    const pips = document.createElement('div'), active = new Set(({1:[4],2:[0,8],3:[0,4,8],4:[0,2,6,8],5:[0,2,4,6,8],6:[0,2,3,5,6,8]})[object.value] || []);
+    pips.className = 'die-pips'; for (let pip = 0; pip < 9; pip += 1) { const dot = document.createElement('i'); if (active.has(pip)) dot.className = 'active'; pips.append(dot); } el.append(pips);
+  } else { const value = document.createElement('strong'); value.textContent = object.value; el.append(value); }
   const sides = document.createElement('small'); sides.textContent = `D${object.sides}`;
-  el.append(value, sides); applyCardSelection(el, object.id);
+  el.append(sides); applyCardSelection(el, object.id);
   el.addEventListener('pointerenter', () => { hoveredObject = { element: el, object }; });
   el.addEventListener('pointerleave', () => { if (hoveredObject?.element === el) hoveredObject = null; });
+  el.addEventListener('contextmenu', (event) => event.preventDefault());
   el.addEventListener('pointerdown', (event) => dragTableObject(event, el, object));
   return el;
 }
 
 function dragFromHand(event, el, card) {
-  if (event.button !== 0) return;
+  if (event.button !== 0 || event.ctrlKey) return;
   event.preventDefault(); markLocalSelection(el); el.setPointerCapture(event.pointerId);
   const start = { x: event.clientX, y: event.clientY };
   const table = $('#table');
@@ -297,7 +314,7 @@ function dragFromHand(event, el, card) {
     }
     ghost.style.left = `${e.clientX}px`; ghost.style.top = `${e.clientY}px`;
     table.classList.toggle('drop-target', pointInside(table, e.clientX, e.clientY));
-    stackTarget?.classList.remove('stack-target'); stackTarget = findStackTarget(e.clientX, e.clientY);
+    stackTarget?.classList.remove('stack-target'); stackTarget = findStackTarget(ghost);
     stackTarget?.classList.add('stack-target');
   };
   const finish = (e, cancelled = false) => {
@@ -315,7 +332,9 @@ function dragFromHand(event, el, card) {
 }
 
 function dragTableCard(event, el, card) {
-  if (![0, 2].includes(event.button)) return;
+  if (![0, 2].includes(event.button) || event.ctrlKey) return;
+  const selectedIds = ownSelectionIds();
+  if (selectedIds.length > 1 && selectedIds.includes(card.id)) return dragSelectedGroup(event, el, card);
   const wholeStack = event.button === 2 && Boolean(card.stack?.length), scope = wholeStack ? 'stack' : 'top';
   event.preventDefault(); markLocalSelection(el, scope); el.setPointerCapture(event.pointerId);
   const handPanel = $('.hand-panel');
@@ -330,7 +349,7 @@ function dragTableCard(event, el, card) {
       ghost.style.left = `${e.clientX}px`; ghost.style.top = `${e.clientY}px`;
     } else { el.style.left = `${position.x}%`; el.style.top = `${position.y}%`; }
     handPanel.classList.toggle('drop-target', !wholeStack && pointInside(handPanel, e.clientX, e.clientY));
-    stackTarget?.classList.remove('stack-target'); stackTarget = findStackTarget(e.clientX, e.clientY, el);
+    stackTarget?.classList.remove('stack-target'); stackTarget = findStackTarget(ghost || el, el);
     stackTarget?.classList.add('stack-target');
   };
   const finish = (e, cancelled = false) => {
@@ -348,7 +367,10 @@ function dragTableCard(event, el, card) {
 }
 
 function dragTableObject(event, el, object) {
-  if (event.button !== 0) return;
+  if (![0, 2].includes(event.button) || event.ctrlKey) return;
+  const selectedIds = ownSelectionIds();
+  if (selectedIds.length > 1 && selectedIds.includes(object.id)) return dragSelectedGroup(event, el, object);
+  const roll = event.button === 2;
   event.preventDefault(); markLocalSelection(el); el.setPointerCapture(event.pointerId);
   const start = { x: event.clientX, y: event.clientY };
   let dragging = false;
@@ -361,17 +383,53 @@ function dragTableObject(event, el, object) {
   const finish = (e, cancelled = false) => {
     el.removeEventListener('pointermove', move); el.removeEventListener('pointerup', up); el.removeEventListener('pointercancel', cancel);
     if (cancelled) { render(); return; }
-    if (dragging) action('moveObject', { objectId: object.id, x: Number(el.dataset.x) || object.x, y: Number(el.dataset.y) || object.y });
+    if (dragging) action('moveObject', { objectId: object.id, x: Number(el.dataset.x) || object.x, y: Number(el.dataset.y) || object.y, roll });
     else action('select', { cardId: object.id });
   };
   const up = (e) => finish(e), cancel = (e) => finish(e, true);
   el.addEventListener('pointermove', move); el.addEventListener('pointerup', up, { once: true }); el.addEventListener('pointercancel', cancel, { once: true });
 }
 
-function findStackTarget(x, y, source = null) {
-  for (const node of document.elementsFromPoint(x, y)) {
-    const card = node.closest?.('.table-card');
-    if (card && card !== source && !source?.contains(node)) return card;
+function dragSelectedGroup(event, anchorElement, anchor) {
+  event.preventDefault(); anchorElement.setPointerCapture(event.pointerId);
+  const ids = ownSelectionIds(), selected = new Set(ids), items = [...(state.table || []), ...(state.objects || [])];
+  const anchorStart = { x: anchor.x, y: anchor.y }, start = { x: event.clientX, y: event.clientY };
+  const entries = items.filter(({ id }) => selected.has(id)).map((item) => ({
+    item,
+    element: document.querySelector(`[data-card-id="${CSS.escape(item.id)}"], [data-object-id="${CSS.escape(item.id)}"]`)
+  }));
+  let dragging = false;
+  const move = (e) => {
+    if (!dragging && Math.hypot(e.clientX - start.x, e.clientY - start.y) < 5) return;
+    dragging = true; hoveredCard = null; hoveredObject = null; hideCardZoom();
+    const position = tablePosition(e.clientX, e.clientY), dx = position.x - anchorStart.x, dy = position.y - anchorStart.y;
+    entries.forEach(({ item, element }) => {
+      if (!element) return;
+      const x = clampPercent(item.x + dx), y = clampPercent(item.y + dy);
+      element.style.left = `${x}%`; element.style.top = `${y}%`; element.dataset.x = x; element.dataset.y = y;
+    });
+    anchorElement.dataset.x = position.x; anchorElement.dataset.y = position.y;
+  };
+  const finish = (e, cancelled = false) => {
+    anchorElement.removeEventListener('pointermove', move); anchorElement.removeEventListener('pointerup', up); anchorElement.removeEventListener('pointercancel', cancel);
+    if (cancelled) return render();
+    if (dragging) action('moveSelection', { anchorId: anchor.id, x: Number(anchorElement.dataset.x) || anchor.x, y: Number(anchorElement.dataset.y) || anchor.y, rollDice: event.button === 2, objectIds: ids });
+  };
+  const up = (e) => finish(e), cancel = (e) => finish(e, true);
+  anchorElement.addEventListener('pointermove', move); anchorElement.addEventListener('pointerup', up, { once: true }); anchorElement.addEventListener('pointercancel', cancel, { once: true });
+}
+
+function findStackTarget(movingCard, excluded = null) {
+  if (!movingCard) return null;
+  const source = movingCard.getBoundingClientRect(), sourceArea = source.width * source.height;
+  if (!sourceArea) return null;
+  const cards = [...ui.tableCards.querySelectorAll('.table-card')].reverse();
+  for (const card of cards) {
+    if (card === movingCard || card === excluded) continue;
+    const target = card.getBoundingClientRect();
+    const width = Math.max(0, Math.min(source.right, target.right) - Math.max(source.left, target.left));
+    const height = Math.max(0, Math.min(source.bottom, target.bottom) - Math.max(source.top, target.top));
+    if ((width * height) / sourceArea > .85) return card;
   }
   return null;
 }
@@ -414,6 +472,33 @@ function panTable(event) {
 
 function applyTableTransform() { ui.tableSurface.style.transform = `translate(${tablePanX}px,${tablePanY}px) scale(${tableZoom})`; }
 
+function startBoxSelection(event) {
+  if (event.button !== 0 || !event.ctrlKey) return;
+  event.preventDefault(); event.stopPropagation(); ui.table.setPointerCapture(event.pointerId);
+  const tableBox = ui.table.getBoundingClientRect(), start = { x: event.clientX, y: event.clientY };
+  const box = document.createElement('div'); box.className = 'selection-box'; ui.table.append(box);
+  let dragging = false;
+  const move = (e) => {
+    if (!dragging && Math.hypot(e.clientX - start.x, e.clientY - start.y) < 4) return;
+    dragging = true;
+    const left = Math.max(tableBox.left, Math.min(start.x, e.clientX)), top = Math.max(tableBox.top, Math.min(start.y, e.clientY));
+    const right = Math.min(tableBox.right, Math.max(start.x, e.clientX)), bottom = Math.min(tableBox.bottom, Math.max(start.y, e.clientY));
+    box.style.left = `${left - tableBox.left}px`; box.style.top = `${top - tableBox.top}px`; box.style.width = `${Math.max(0, right - left)}px`; box.style.height = `${Math.max(0, bottom - top)}px`;
+  };
+  const finish = (e, cancelled = false) => {
+    ui.table.removeEventListener('pointermove', move); ui.table.removeEventListener('pointerup', up); ui.table.removeEventListener('pointercancel', cancel); box.remove();
+    if (cancelled) return;
+    const left = Math.min(start.x, e.clientX), right = Math.max(start.x, e.clientX), top = Math.min(start.y, e.clientY), bottom = Math.max(start.y, e.clientY);
+    const ids = dragging ? [...ui.table.querySelectorAll('.table-card,.table-object')].filter((element) => {
+      const bounds = element.getBoundingClientRect(), x = bounds.left + bounds.width / 2, y = bounds.top + bounds.height / 2;
+      return x >= left && x <= right && y >= top && y <= bottom;
+    }).map((element) => element.dataset.cardId || element.dataset.objectId).filter(Boolean) : [];
+    markLocalSelectionMany(ids); action('selectMany', { objectIds: ids });
+  };
+  const up = (e) => finish(e), cancel = (e) => finish(e, true);
+  ui.table.addEventListener('pointermove', move); ui.table.addEventListener('pointerup', up, { once: true }); ui.table.addEventListener('pointercancel', cancel, { once: true });
+}
+
 function pointInside(element, x, y) {
   const box = element.getBoundingClientRect();
   return x >= box.left && x <= box.right && y >= box.top && y <= box.bottom;
@@ -448,6 +533,11 @@ function cardKeyDown(event) {
     const cardId = hoveredCard.card.id; hoveredCard = null; hideCardZoom();
     action('hand', { cardId });
   }
+  const selectedDice = ownSelectionIds().filter((id) => state?.objects?.some((object) => object.id === id && object.type === 'die'));
+  if (key === 's' && selectedDice.length > 1 && !event.repeat) {
+    event.preventDefault(); hoveredObject = null;
+    action('rollDice', { objectIds: selectedDice }); return;
+  }
   if (key === 's' && hoveredObject?.object.type === 'die' && !event.repeat) {
     event.preventDefault();
     const objectId = hoveredObject.object.id; hoveredObject = null;
@@ -464,6 +554,14 @@ function cardKeyDown(event) {
     event.preventDefault();
     if (!hoveredCard.card.stack?.length) return toast('Only a stack can be dealt', true);
     openDealDialog(hoveredCard.card);
+  }
+  if (key === 'o' && hoveredCard?.zone === 'table' && !event.repeat) {
+    event.preventDefault();
+    if (!hoveredCard.card.stack?.length) return toast('Only a stack can be laid out', true);
+    const direction = event.shiftKey ? 'horizontal' : 'vertical', cardBox = hoveredCard.element.getBoundingClientRect(), surfaceBox = ui.tableSurface.getBoundingClientRect();
+    const spacing = direction === 'vertical' ? cardBox.height / surfaceBox.height * 20 : cardBox.width / surfaceBox.width * 20;
+    const cardId = hoveredCard.card.id; hoveredCard = null; hideCardZoom();
+    action('spreadStack', { cardId, direction, spacing });
   }
 }
 
@@ -486,7 +584,7 @@ function hideCardZoom() {
 }
 
 function applyCardSelection(element, cardId) {
-  const selected = (state.selections || []).find(([, selectedCard]) => selectedCard === cardId);
+  const selected = selectionOwner(cardId);
   if (!selected) return;
   const owner = state.players.find((player) => player.id === selected[0]);
   if (!owner) return;
@@ -495,14 +593,33 @@ function applyCardSelection(element, cardId) {
   element.style.setProperty('--selection-color', owner.color);
 }
 
+function selectionOwner(objectId) {
+  const grouped = (state.selectionGroups || []).find(([, ids]) => ids.includes(objectId));
+  return grouped || (state.selections || []).find(([, selectedObject]) => selectedObject === objectId);
+}
+
 function markLocalSelection(element, scope = 'top') {
   document.querySelectorAll(`[data-selected-by="${CSS.escape(playerId)}"]`).forEach((card) => {
     card.classList.remove('selected-card', 'selected-stack'); card.removeAttribute('data-selected-by'); card.style.removeProperty('--selection-color');
   });
   const me = state?.players.find((player) => player.id === playerId);
   if (!me) return;
+  localSelectionIds = [element.dataset.cardId || element.dataset.objectId].filter(Boolean);
   element.classList.add('selected-card'); if (scope === 'stack') element.classList.add('selected-stack'); element.dataset.selectedBy = playerId;
   element.style.setProperty('--selection-color', me.color);
+}
+
+function markLocalSelectionMany(ids) {
+  clearLocalSelection();
+  const me = state?.players.find((player) => player.id === playerId);
+  if (!me) return;
+  localSelectionIds = [...ids];
+  const selected = new Set(ids);
+  document.querySelectorAll('[data-card-id],[data-object-id]').forEach((element) => {
+    const id = element.dataset.cardId || element.dataset.objectId;
+    if (!selected.has(id)) return;
+    element.classList.add('selected-card'); element.dataset.selectedBy = playerId; element.style.setProperty('--selection-color', me.color);
+  });
 }
 
 function clearSelection() {
@@ -511,13 +628,14 @@ function clearSelection() {
 }
 
 function clearLocalSelection() {
+  localSelectionIds = [];
   document.querySelectorAll(`[data-selected-by="${CSS.escape(playerId)}"]`).forEach((card) => {
     card.classList.remove('selected-card', 'selected-stack'); card.removeAttribute('data-selected-by'); card.style.removeProperty('--selection-color');
   });
 }
 
 function clearSelectionFromTable(event) {
-  if (event.button !== 0) return;
+  if (event.button !== 0 || event.ctrlKey) return;
   if (event.target.closest('.card,.table-object,.table-tools')) return;
   clearSelection();
 }
@@ -546,6 +664,14 @@ function ownSelection() {
   const objectId = (state?.selections || []).find(([id]) => id === playerId)?.[1] || '';
   const scope = (state?.selectionScopes || []).find(([id]) => id === playerId)?.[1] || 'top';
   return { objectId, scope };
+}
+
+function ownSelectionIds() {
+  if (localSelectionIds.length) return [...localSelectionIds];
+  const group = (state?.selectionGroups || []).find(([id]) => id === playerId)?.[1];
+  if (group?.length) return group;
+  const objectId = (state?.selections || []).find(([id]) => id === playerId)?.[1];
+  return objectId ? [objectId] : [];
 }
 
 function destroySelectedObject() {
@@ -659,6 +785,7 @@ function networkError(error) { toast(`Relay error: ${error.message}`, true); }
 function imageDimensions(file) { return new Promise((resolve, reject) => { const image = new Image(), url = URL.createObjectURL(file); image.onload = () => { resolve({ width: image.naturalWidth, height: image.naturalHeight }); URL.revokeObjectURL(url); }; image.onerror = () => { reject(new Error(`${file.name} is not a readable image.`)); URL.revokeObjectURL(url); }; image.src = url; }); }
 function fileSize(bytes) { return bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB` : `${Math.ceil(bytes / 1024)} KB`; }
 function contrastColor(hex) { const value = String(hex || '').replace('#', ''); const rgb = Number.parseInt(value, 16); return (((rgb >> 16) * 299 + ((rgb >> 8) & 255) * 587 + (rgb & 255) * 114) / 1000) > 145 ? '#171b18' : '#fffdf8'; }
+function clampPercent(value) { return Math.max(3, Math.min(97, Number(value) || 50)); }
 function initials(name) { return String(name || '?').split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase(); }
 function randomCode() { return crypto.getRandomValues(new Uint32Array(2)).join('-'); }
 function cssUrl(value) { return String(value || '').replace(/["\\\n\r]/g, (char) => `\\${char}`); }

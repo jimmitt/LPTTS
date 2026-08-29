@@ -8,8 +8,10 @@ export class GameRoom {
     this.deck = [];
     this.selections = new Map();
     this.selectionScopes = new Map();
+    this.selectionGroups = new Map();
     this.objects = [];
     this.background = '';
+    this.currentTurn = '';
   }
 
   static restore(data) {
@@ -23,13 +25,15 @@ export class GameRoom {
     if (data.deck.length) room.table.push(makePile(data.deck.map((card) => ({ ...card, owner: null, faceUp: false })), { x: 78, y: 72, rotation: 0 }));
     room.selections = new Map(Array.isArray(data.selections) ? data.selections : []);
     room.selectionScopes = new Map(Array.isArray(data.selectionScopes) ? data.selectionScopes : []);
+    room.selectionGroups = new Map(Array.isArray(data.selectionGroups) ? data.selectionGroups.map(([id, ids]) => [id, Array.isArray(ids) ? ids : []]) : []);
     room.objects = Array.isArray(data.objects) ? data.objects : [];
     room.background = typeof data.background === 'string' ? data.background : '';
+    room.currentTurn = room.players.has(data.currentTurn) ? data.currentTurn : (room.players.keys().next().value || '');
     return room;
   }
 
   serialize() {
-    return { code: this.code, players: [...this.players.values()], table: this.table, deck: this.deck, selections: [...this.selections], selectionScopes: [...this.selectionScopes], objects: this.objects, background: this.background };
+    return { code: this.code, players: [...this.players.values()], table: this.table, deck: this.deck, selections: [...this.selections], selectionScopes: [...this.selectionScopes], selectionGroups: [...this.selectionGroups], objects: this.objects, background: this.background, currentTurn: this.currentTurn };
   }
 
   join(id, name) {
@@ -40,9 +44,20 @@ export class GameRoom {
       color: COLORS[this.players.size % COLORS.length],
       hand: []
     });
+    if (!this.currentTurn) this.currentTurn = id;
   }
 
-  leave(id) { this.players.delete(id); this.selections.delete(id); this.selectionScopes.delete(id); }
+  leave(id) {
+    const order = [...this.players.keys()], leavingTurn = this.currentTurn === id, index = order.indexOf(id);
+    this.players.delete(id); this.selections.delete(id); this.selectionScopes.delete(id); this.selectionGroups.delete(id);
+    if (leavingTurn) {
+      this.currentTurn = '';
+      for (let step = 1; step <= order.length; step += 1) {
+        const candidate = order[(index + step) % order.length];
+        if (this.players.has(candidate)) { this.currentTurn = candidate; break; }
+      }
+    }
+  }
 
   importDeck(cards, playerId = null) {
     if (cards.length > 1000) throw new Error('Decks are limited to 1,000 cards.');
@@ -143,7 +158,7 @@ export class GameRoom {
 
   select(playerId, cardId, scope = 'top') {
     if (!this.players.has(playerId)) throw new Error('Player not found.');
-    this.selections.delete(playerId); this.selectionScopes.delete(playerId);
+    this.selections.delete(playerId); this.selectionScopes.delete(playerId); this.selectionGroups.delete(playerId);
     if (!cardId) return;
     const ownHand = this.players.get(playerId).hand;
     const tableItem = this.table.find(({ id }) => id === cardId);
@@ -153,7 +168,42 @@ export class GameRoom {
     for (const [otherPlayer, selectedCard] of this.selections) {
       if (selectedCard === cardId) { this.selections.delete(otherPlayer); this.selectionScopes.delete(otherPlayer); }
     }
+    for (const [otherPlayer, selectedIds] of this.selectionGroups) {
+      if (otherPlayer !== playerId && selectedIds.includes(cardId)) this.removeFromSelectionGroup(otherPlayer, new Set([cardId]));
+    }
     this.selections.set(playerId, cardId); this.selectionScopes.set(playerId, selectionScope);
+  }
+
+  selectMany(playerId, objectIds) {
+    if (!this.players.has(playerId)) throw new Error('Player not found.');
+    const available = new Set([...this.table.map(({ id }) => id), ...this.objects.map(({ id }) => id)]);
+    const ids = [...new Set(Array.isArray(objectIds) ? objectIds : [])].filter((id) => available.has(id)).slice(0, 500);
+    this.selections.delete(playerId); this.selectionScopes.delete(playerId); this.selectionGroups.delete(playerId);
+    if (!ids.length) return;
+    const claimed = new Set(ids);
+    for (const [otherPlayer, selectedId] of this.selections) {
+      if (otherPlayer !== playerId && claimed.has(selectedId)) { this.selections.delete(otherPlayer); this.selectionScopes.delete(otherPlayer); }
+    }
+    for (const otherPlayer of this.selectionGroups.keys()) if (otherPlayer !== playerId) this.removeFromSelectionGroup(otherPlayer, claimed);
+    this.selections.set(playerId, ids[0]); this.selectionScopes.set(playerId, 'top');
+    if (ids.length > 1) this.selectionGroups.set(playerId, ids);
+  }
+
+  removeFromSelectionGroup(playerId, removedIds) {
+    const remaining = (this.selectionGroups.get(playerId) || []).filter((id) => !removedIds.has(id));
+    if (remaining.length > 1) this.selectionGroups.set(playerId, remaining);
+    else this.selectionGroups.delete(playerId);
+    if (!remaining.length) { this.selections.delete(playerId); this.selectionScopes.delete(playerId); }
+    else if (!remaining.includes(this.selections.get(playerId))) this.selections.set(playerId, remaining[0]);
+  }
+
+  nextTurn(playerId) {
+    if (!this.players.has(playerId)) throw new Error('Player not found.');
+    if (this.currentTurn !== playerId) throw new Error('Only the current player can end the turn.');
+    const order = [...this.players.keys()], index = order.indexOf(playerId);
+    this.currentTurn = order[(index + 1) % order.length];
+    this.select(playerId, null);
+    return this.currentTurn;
   }
 
   setBackground(playerId, url) {
@@ -179,20 +229,51 @@ export class GameRoom {
     return die;
   }
 
-  moveObject(playerId, objectId, x, y) {
+  moveObject(playerId, objectId, x, y, roll = false) {
     if (!this.players.has(playerId)) throw new Error('Player not found.');
     const object = this.objects.find(({ id }) => id === objectId);
     if (!object) throw new Error('Object is no longer on the table.');
-    object.x = clamp(x); object.y = clamp(y); this.select(playerId, objectId);
+    object.x = clamp(x); object.y = clamp(y);
+    if (roll && object.type === 'die') this.randomizeDie(object);
+    this.select(playerId, objectId);
   }
 
   rollDie(playerId, objectId) {
     if (!this.players.has(playerId)) throw new Error('Player not found.');
     const die = this.objects.find(({ id, type }) => id === objectId && type === 'die');
     if (!die) throw new Error('Die is no longer on the table.');
-    die.value = randomRoll(die.sides); die.rotation = Math.floor(Math.random() * 31) - 15;
+    this.randomizeDie(die);
     this.select(playerId, objectId);
     return die.value;
+  }
+
+  rollDice(playerId, objectIds) {
+    if (!this.players.has(playerId)) throw new Error('Player not found.');
+    const ids = new Set(Array.isArray(objectIds) ? objectIds : []), dice = this.objects.filter(({ id, type }) => type === 'die' && ids.has(id));
+    if (!dice.length) throw new Error('Select at least one die.');
+    dice.forEach((die) => this.randomizeDie(die));
+    const current = this.selectionGroups.get(playerId) || [], rolledIds = dice.map(({ id }) => id);
+    if (!rolledIds.every((id) => current.includes(id))) this.selectMany(playerId, rolledIds);
+  }
+
+  moveSelection(playerId, anchorId, x, y, rollDice = false, objectIds = []) {
+    if (!this.players.has(playerId)) throw new Error('Player not found.');
+    let ids = this.selectionGroups.get(playerId) || [];
+    if ((ids.length < 2 || !ids.includes(anchorId)) && objectIds.length > 1) { this.selectMany(playerId, objectIds); ids = this.selectionGroups.get(playerId) || []; }
+    if (ids.length < 2 || !ids.includes(anchorId)) throw new Error('That group is no longer selected.');
+    const items = [...this.table, ...this.objects], anchor = items.find(({ id }) => id === anchorId);
+    if (!anchor) throw new Error('Selected object is no longer on the table.');
+    const dx = clamp(x) - anchor.x, dy = clamp(y) - anchor.y, selected = new Set(ids);
+    this.table.forEach((card) => { if (selected.has(card.id)) { card.x = clamp(card.x + dx); card.y = clamp(card.y + dy); } });
+    this.objects.forEach((object) => {
+      if (!selected.has(object.id)) return;
+      object.x = clamp(object.x + dx); object.y = clamp(object.y + dy);
+      if (rollDice && object.type === 'die') this.randomizeDie(object);
+    });
+  }
+
+  randomizeDie(die) {
+    die.value = randomRoll(die.sides); die.rotation = Math.floor(Math.random() * 31) - 15;
   }
 
   destroy(playerId, objectId, scope = 'top') {
@@ -221,6 +302,7 @@ export class GameRoom {
     for (const [selectedPlayer, selectedId] of this.selections) {
       if (ids.has(selectedId)) { this.selections.delete(selectedPlayer); this.selectionScopes.delete(selectedPlayer); }
     }
+    for (const playerId of this.selectionGroups.keys()) this.removeFromSelectionGroup(playerId, ids);
   }
 
   stack(playerId, sourceId, targetId) {
@@ -286,6 +368,25 @@ export class GameRoom {
     this.select(playerId, cards.length ? this.table[index].id : null, 'stack');
   }
 
+  spreadStack(playerId, cardId, direction, spacing) {
+    const index = this.table.findIndex((card) => card.id === cardId);
+    if (index < 0) throw new Error('Stack is no longer on the table.');
+    const current = this.table[index], cards = pileCards(current);
+    if (cards.length < 2) throw new Error('This card is not a stack.');
+    if (!['vertical', 'horizontal'].includes(direction)) throw new Error('Choose a valid stack layout.');
+    const requested = Math.max(.25, Math.min(20, Number(spacing) || 3));
+    const axis = direction === 'vertical' ? 'y' : 'x', availablePositive = 97 - current[axis], availableNegative = current[axis] - 3;
+    const sign = availablePositive >= availableNegative ? 1 : -1;
+    const step = Math.min(requested, Math.max(0.25, Math.max(availablePositive, availableNegative) / (cards.length - 1)));
+    const laidOut = cards.map((card, cardIndex) => makePile([card], {
+      x: direction === 'horizontal' ? clamp(current.x + sign * step * cardIndex) : current.x,
+      y: direction === 'vertical' ? clamp(current.y + sign * step * cardIndex) : current.y,
+      rotation: current.rotation || 0
+    }));
+    this.table.splice(index, 1, ...laidOut);
+    this.select(playerId, laidOut[laidOut.length - 1].id, 'top');
+  }
+
   removeTopCard(index) {
     const current = this.table[index], cards = pileCards(current), card = cards.pop();
     if (cards.length) this.table[index] = makePile(cards, { x: current.x, y: current.y, rotation: current.rotation || 0 });
@@ -301,8 +402,10 @@ export class GameRoom {
       table: this.table,
       selections: [...this.selections],
       selectionScopes: [...this.selectionScopes],
+      selectionGroups: [...this.selectionGroups],
       objects: this.objects,
       background: this.background,
+      currentTurn: this.currentTurn,
       players: [...this.players.values()].map((player) => ({
         id: player.id, name: player.name, color: player.color,
         handCount: player.hand.length,
