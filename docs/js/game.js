@@ -84,6 +84,16 @@ export class GameRoom {
     this.select(playerId, cardId, card.stack?.length ? 'stack' : 'top');
   }
 
+  moveTop(playerId, cardId, x, y) {
+    const index = this.table.findIndex((card) => card.id === cardId);
+    if (index < 0) throw new Error('Card not found.');
+    const pile = this.table[index];
+    if (!pile.stack?.length) return this.move(playerId, cardId, x, y);
+    const card = this.removeTopCard(index);
+    this.table.push({ ...card, x: clamp(x), y: clamp(y), rotation: pile.rotation || 0 });
+    this.select(playerId, card.id, 'top');
+  }
+
   take(playerId, cardId) {
     const index = this.table.findIndex((card) => card.id === cardId);
     if (index < 0) throw new Error('Card not found.');
@@ -218,6 +228,19 @@ export class GameRoom {
     const pile = makePile(cards, { x: target.x, y: target.y, rotation: target.rotation || 0 });
     nextTable.push(pile); this.table = nextTable;
     this.select(playerId, pile.id, 'stack');
+  }
+
+  stackTop(playerId, sourceId, targetId) {
+    if (sourceId === targetId) throw new Error('Choose a different card to make a stack.');
+    const sourceIndex = this.table.findIndex((card) => card.id === sourceId);
+    if (sourceIndex < 0 || !this.table.some((card) => card.id === targetId)) throw new Error('Card is no longer on the table.');
+    const source = this.table[sourceIndex];
+    if (!source.stack?.length) {
+      this.stack(playerId, sourceId, targetId); this.select(playerId, sourceId, 'top'); return;
+    }
+    const card = this.removeTopCard(sourceIndex);
+    this.table.push({ ...card, x: source.x, y: source.y, rotation: source.rotation || 0 });
+    this.stack(playerId, card.id, targetId); this.select(playerId, card.id, 'top');
   }
 
   shuffleStack(playerId, cardId) {
