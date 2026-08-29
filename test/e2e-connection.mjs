@@ -253,6 +253,17 @@ async function runConnectionTest() {
     await guest.mouse.up({ button: 'right' });
     await guest.waitForFunction(() => document.querySelectorAll('.die-pips i.active').length === 1);
 
+    const singleRollPosition = await guest.locator('.die').evaluate((die) => ({ x: die.dataset.x, y: die.dataset.y }));
+    await host.evaluate(() => { Math.random = () => .5; });
+    await guest.locator('.die').hover();
+    await guest.keyboard.press('s');
+    await guest.waitForSelector('.die.rolling-in');
+    const singleAnimation = await guest.locator('.die.rolling-in').evaluate((die) => ({ name: getComputedStyle(die).animationName, startX: die.style.getPropertyValue('--roll-start-x') }));
+    if (singleAnimation.name !== 'die-roll-onto-table' || !singleAnimation.startX.includes('120vw')) throw new Error('Single-die S roll did not start off-screen with the table-entry animation.');
+    await guest.waitForFunction(() => document.querySelectorAll('.die-pips i.active').length === 4 && !document.querySelector('.die.rolling-in'));
+    const singleRollLanding = await guest.locator('.die').evaluate((die) => ({ x: die.dataset.x, y: die.dataset.y }));
+    if (singleRollLanding.x !== singleRollPosition.x || singleRollLanding.y !== singleRollPosition.y) throw new Error('Animated die did not land at its original table position.');
+
     await host.evaluate(() => { Math.random = () => .5; });
     await host.click('#add-die');
     await host.click('#dice-form button[type="submit"]');
@@ -276,7 +287,10 @@ async function runConnectionTest() {
     await guest.waitForFunction(() => document.querySelectorAll('.die.selected-card').length === 2);
     await host.evaluate(() => { Math.random = () => .33; });
     await guest.keyboard.press('s');
+    await guest.waitForFunction(() => document.querySelectorAll('.die.rolling-in').length === 2);
+    if (!await guest.locator('.die.rolling-in').evaluateAll((dice) => dice.every((die) => getComputedStyle(die).animationName === 'die-roll-onto-table'))) throw new Error('Selected dice did not animate together.');
     await guest.waitForFunction(() => [...document.querySelectorAll('.die')].every((die) => die.querySelectorAll('.die-pips i.active').length === 2));
+    await guest.waitForFunction(() => !document.querySelector('.die.rolling-in'));
     const groupBefore = await guest.locator('.die').evaluateAll((dice) => dice.map((die) => die.getBoundingClientRect().toJSON()));
     await host.evaluate(() => { Math.random = () => .66; });
     await guest.mouse.move(groupBefore[0].x + groupBefore[0].width / 2, groupBefore[0].y + groupBefore[0].height / 2);
@@ -334,7 +348,7 @@ async function runConnectionTest() {
     await guest.click('#resume-button');
     await guest.waitForSelector('#game:not([hidden])');
     await guest.waitForFunction(() => document.querySelector('#hand-count')?.textContent === '2');
-    console.log('E2E passed: turns, cyclic fans, group stacking/deletion, graphical trash restore, dice, pan, chat, and resume');
+    console.log('E2E passed: turns, cyclic fans, group stacking/deletion, animated dice rolls, graphical trash restore, pan, chat, and resume');
     await hostContext.close(); await guestContext.close();
   } finally {
     await browser.close(); await server.close();

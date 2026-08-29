@@ -1,4 +1,4 @@
-import { GameRoom } from './game.js?v=11';
+import { GameRoom } from './game.js?v=12';
 import { parseTtsDeck } from './tts.js';
 import { createImageDeck } from './image-deck.js?v=2';
 import { createStandardDeck } from './standard-deck.js?v=1';
@@ -19,6 +19,7 @@ let pendingDealCardId = '';
 let tableZoom = 1, tablePanX = 0, tablePanY = 0;
 let localSelectionIds = [];
 let lastFanCardId = '';
+let seenRollAnimationId = '';
 const trashSelectionIds = new Set();
 const remotePlayers = new Set();
 const seenChat = new Set();
@@ -259,7 +260,8 @@ function render() {
   ui.tableBoard.style.backgroundImage = state.background ? `url("${cssUrl(state.background)}")` : '';
   ui.tableBoard.hidden = !state.background;
   ui.tableCards.replaceChildren(...state.table.map(tableCard));
-  ui.tableObjects.replaceChildren(...(state.objects || []).map(tableObject));
+  const rollingDice = freshRollAnimationIds();
+  ui.tableObjects.replaceChildren(...(state.objects || []).map((object, index) => tableObject(object, index, rollingDice.has(object.id))));
   ui.empty.hidden = state.table.length > 0 || (state.objects || []).length > 0;
   const selectedIds = ownSelectionIds(), selected = ownSelection(), trash = $('#trash-object'); trash.disabled = false;
   trash.title = selectedIds.length > 1 ? `Delete ${selectedIds.length} selected items` : selected.objectId ? (selected.scope === 'stack' ? 'Delete selected stack' : 'Delete selected object') : `Open trash (${state.trash?.length || 0})`;
@@ -292,7 +294,7 @@ function tableCard(card, index) {
   return el;
 }
 
-function tableObject(object, index) {
+function tableObject(object, index, rolling = false) {
   if (object.type !== 'die') return document.createDocumentFragment();
   const el = document.createElement('div'); el.className = 'table-object die';
   el.dataset.objectId = object.id; el.dataset.x = object.x; el.dataset.y = object.y; el.style.left = `${object.x}%`; el.style.top = `${object.y}%`; el.style.zIndex = 1000 + index;
@@ -304,11 +306,34 @@ function tableObject(object, index) {
   } else { const value = document.createElement('strong'); value.textContent = object.value; el.append(value); }
   const sides = document.createElement('small'); sides.textContent = `D${object.sides}`;
   el.append(sides); applyCardSelection(el, object.id);
+  if (rolling) prepareDieRollAnimation(el, object, index);
   el.addEventListener('pointerenter', () => { hoveredObject = { element: el, object }; });
   el.addEventListener('pointerleave', () => { if (hoveredObject?.element === el) hoveredObject = null; });
   el.addEventListener('contextmenu', (event) => event.preventDefault());
   el.addEventListener('pointerdown', (event) => dragTableObject(event, el, object));
   return el;
+}
+
+function freshRollAnimationIds() {
+  const roll = state?.rollAnimation;
+  if (!roll?.id || roll.id === seenRollAnimationId) return new Set();
+  seenRollAnimationId = roll.id;
+  if (!Array.isArray(roll.objectIds) || Date.now() - Number(roll.startedAt || 0) > 15000) return new Set();
+  return new Set(roll.objectIds);
+}
+
+function prepareDieRollAnimation(element, object, index) {
+  const seed = [...object.id].reduce((total, character) => total + character.charCodeAt(0), 0), fromLeft = seed % 2 === 0;
+  element.classList.add('rolling-in');
+  element.style.setProperty('--roll-start-x', fromLeft ? '-120vw' : '120vw');
+  element.style.setProperty('--roll-start-y', `${-25 - seed % 45}vh`);
+  element.style.setProperty('--roll-overshoot-x', fromLeft ? '18px' : '-18px');
+  element.style.setProperty('--roll-rebound-x', fromLeft ? '-9px' : '9px');
+  element.style.setProperty('--roll-settle-x', fromLeft ? '4px' : '-4px');
+  element.style.setProperty('--roll-start-rotation', `${(object.rotation || 0) + (fromLeft ? -900 : 900)}deg`);
+  element.style.setProperty('--die-rotation', `${object.rotation || 0}deg`);
+  element.style.setProperty('--roll-delay', `${Math.min(index, 6) * 55}ms`);
+  element.addEventListener('animationend', () => element.classList.remove('rolling-in'), { once: true });
 }
 
 function dragFromHand(event, el, card) {

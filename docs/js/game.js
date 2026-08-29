@@ -13,6 +13,7 @@ export class GameRoom {
     this.background = '';
     this.currentTurn = '';
     this.trash = [];
+    this.rollAnimation = null;
   }
 
   static restore(data) {
@@ -31,11 +32,12 @@ export class GameRoom {
     room.background = typeof data.background === 'string' ? data.background : '';
     room.currentTurn = room.players.has(data.currentTurn) ? data.currentTurn : (room.players.keys().next().value || '');
     room.trash = Array.isArray(data.trash) ? data.trash : [];
+    room.rollAnimation = data.rollAnimation && typeof data.rollAnimation.id === 'string' ? data.rollAnimation : null;
     return room;
   }
 
   serialize() {
-    return { code: this.code, players: [...this.players.values()], table: this.table, deck: this.deck, selections: [...this.selections], selectionScopes: [...this.selectionScopes], selectionGroups: [...this.selectionGroups], objects: this.objects, background: this.background, currentTurn: this.currentTurn, trash: this.trash };
+    return { code: this.code, players: [...this.players.values()], table: this.table, deck: this.deck, selections: [...this.selections], selectionScopes: [...this.selectionScopes], selectionGroups: [...this.selectionGroups], objects: this.objects, background: this.background, currentTurn: this.currentTurn, trash: this.trash, rollAnimation: this.rollAnimation };
   }
 
   join(id, name) {
@@ -249,6 +251,7 @@ export class GameRoom {
     const die = this.objects.find(({ id, type }) => id === objectId && type === 'die');
     if (!die) throw new Error('Die is no longer on the table.');
     this.randomizeDie(die);
+    this.startRollAnimation([objectId]);
     this.select(playerId, objectId);
     return die.value;
   }
@@ -259,7 +262,12 @@ export class GameRoom {
     if (!dice.length) throw new Error('Select at least one die.');
     dice.forEach((die) => this.randomizeDie(die));
     const current = this.selectionGroups.get(playerId) || [], rolledIds = dice.map(({ id }) => id);
+    this.startRollAnimation(rolledIds);
     if (!rolledIds.every((id) => current.includes(id))) this.selectMany(playerId, rolledIds);
+  }
+
+  startRollAnimation(objectIds) {
+    this.rollAnimation = { id: crypto.randomUUID(), objectIds: [...objectIds], startedAt: Date.now() };
   }
 
   moveSelection(playerId, anchorId, x, y, rollDice = false, objectIds = []) {
@@ -515,6 +523,7 @@ export class GameRoom {
       objects: this.objects,
       background: this.background,
       currentTurn: this.currentTurn,
+      rollAnimation: this.rollAnimation,
       trash: this.trash.map(({ item, ...entry }) => entry.zone === 'hand' && entry.owner !== viewerId
         ? { ...entry, label: 'Private card', private: true }
         : { ...entry, item }),
