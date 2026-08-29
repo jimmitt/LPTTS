@@ -1,4 +1,4 @@
-import { GameRoom } from './game.js?v=9';
+import { GameRoom } from './game.js?v=10';
 import { parseTtsDeck } from './tts.js';
 import { createImageDeck } from './image-deck.js?v=2';
 import { createStandardDeck } from './standard-deck.js?v=1';
@@ -50,7 +50,8 @@ $('#table').addEventListener('wheel', zoomTable, { passive: false });
 $('#deal-form').addEventListener('submit', submitDeal);
 $('#add-die').addEventListener('click', () => $('#dice-dialog').showModal());
 $('#dice-form').addEventListener('submit', createDie);
-$('#trash-object').addEventListener('click', destroySelectedObject);
+$('#trash-object').addEventListener('click', useTrash);
+$('#trash-items').addEventListener('click', restoreTrashItem);
 $('#background-button').addEventListener('click', openBackgroundDialog);
 $('#background-form').addEventListener('submit', applyBackground);
 $('#remove-background').addEventListener('click', removeBackground);
@@ -168,6 +169,7 @@ function applyHostAction(actor, type, body) {
     else if (type === 'rollDice') room.rollDice(actor, body.objectIds);
     else if (type === 'nextTurn') room.nextTurn(actor);
     else if (type === 'destroy') room.destroy(actor, body.objectId, body.scope || 'top');
+    else if (type === 'restoreTrash') room.restoreTrash(actor, body.trashId);
     else if (type === 'background') {
       if (actor !== playerId) throw new Error('Only the host can change the table background.');
       room.setBackground(actor, body.url);
@@ -252,8 +254,10 @@ function render() {
   ui.tableCards.replaceChildren(...state.table.map(tableCard));
   ui.tableObjects.replaceChildren(...(state.objects || []).map(tableObject));
   ui.empty.hidden = state.table.length > 0 || (state.objects || []).length > 0;
-  const selected = ownSelection(), trash = $('#trash-object'); trash.disabled = !selected.objectId;
-  trash.title = selected.scope === 'stack' ? 'Delete selected stack' : 'Delete selected object'; trash.setAttribute('aria-label', trash.title);
+  const selected = ownSelection(), trash = $('#trash-object'); trash.disabled = false;
+  trash.title = selected.objectId ? (selected.scope === 'stack' ? 'Delete selected stack' : 'Delete selected object') : `Open trash (${state.trash?.length || 0})`;
+  trash.setAttribute('aria-label', trash.title);
+  if ($('#trash-dialog').open) renderTrashDialog();
 }
 
 function handCard(card) {
@@ -661,7 +665,7 @@ function createDie(event) {
 }
 
 function ownSelection() {
-  const objectId = (state?.selections || []).find(([id]) => id === playerId)?.[1] || '';
+  const objectId = ownSelectionIds()[0] || '';
   const scope = (state?.selectionScopes || []).find(([id]) => id === playerId)?.[1] || 'top';
   return { objectId, scope };
 }
@@ -674,10 +678,31 @@ function ownSelectionIds() {
   return objectId ? [objectId] : [];
 }
 
-function destroySelectedObject() {
+function useTrash() {
   const { objectId, scope } = ownSelection();
-  if (!objectId) return toast('Select a card, stack, or die first', true);
+  if (!objectId) { renderTrashDialog(); $('#trash-dialog').showModal(); return; }
   action('destroy', { objectId, scope });
+}
+
+function renderTrashDialog() {
+  const list = $('#trash-items'), entries = state?.trash || [];
+  $('#trash-summary').textContent = entries.length ? `${entries.length} deleted item${entries.length === 1 ? '' : 's'}` : 'Deleted items will appear here.';
+  if (!entries.length) { const empty = document.createElement('p'); empty.className = 'trash-empty'; empty.textContent = 'The trash is empty.'; list.replaceChildren(empty); return; }
+  list.replaceChildren(...entries.map((entry) => {
+    const row = document.createElement('div'); row.className = 'trash-item';
+    const icon = document.createElement('span'); icon.className = 'trash-preview'; icon.textContent = entry.kind === 'object' ? '⚄' : (entry.count > 1 ? '▥' : '▯');
+    const copy = document.createElement('span'), name = document.createElement('strong'), detail = document.createElement('small');
+    name.textContent = entry.label || 'Deleted item'; detail.textContent = entry.private ? 'Private hand card' : (entry.kind === 'object' ? 'Die' : entry.count > 1 ? `${entry.count}-card stack` : entry.zone === 'hand' ? 'Hand card' : 'Table card');
+    copy.append(name, detail);
+    const restore = document.createElement('button'); restore.type = 'button'; restore.dataset.restoreTrash = entry.trashId; restore.textContent = 'Restore';
+    row.append(icon, copy, restore); return row;
+  }));
+}
+
+function restoreTrashItem(event) {
+  const button = event.target.closest('[data-restore-trash]');
+  if (!button) return;
+  button.disabled = true; action('restoreTrash', { trashId: button.dataset.restoreTrash });
 }
 
 function openBackgroundDialog() {

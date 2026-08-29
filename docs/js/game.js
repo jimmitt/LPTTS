@@ -12,6 +12,7 @@ export class GameRoom {
     this.objects = [];
     this.background = '';
     this.currentTurn = '';
+    this.trash = [];
   }
 
   static restore(data) {
@@ -29,11 +30,12 @@ export class GameRoom {
     room.objects = Array.isArray(data.objects) ? data.objects : [];
     room.background = typeof data.background === 'string' ? data.background : '';
     room.currentTurn = room.players.has(data.currentTurn) ? data.currentTurn : (room.players.keys().next().value || '');
+    room.trash = Array.isArray(data.trash) ? data.trash : [];
     return room;
   }
 
   serialize() {
-    return { code: this.code, players: [...this.players.values()], table: this.table, deck: this.deck, selections: [...this.selections], selectionScopes: [...this.selectionScopes], selectionGroups: [...this.selectionGroups], objects: this.objects, background: this.background, currentTurn: this.currentTurn };
+    return { code: this.code, players: [...this.players.values()], table: this.table, deck: this.deck, selections: [...this.selections], selectionScopes: [...this.selectionScopes], selectionGroups: [...this.selectionGroups], objects: this.objects, background: this.background, currentTurn: this.currentTurn, trash: this.trash };
   }
 
   join(id, name) {
@@ -283,22 +285,52 @@ export class GameRoom {
     if (!this.players.has(playerId)) throw new Error('Player not found.');
     const objectIndex = this.objects.findIndex(({ id }) => id === objectId);
     if (objectIndex >= 0) {
-      this.objects.splice(objectIndex, 1); this.clearSelectionsFor(new Set([objectId])); return;
+      const [object] = this.objects.splice(objectIndex, 1);
+      this.addTrash({ kind: 'object', zone: 'table', label: object.type === 'die' ? `D${object.sides}` : 'Table object', count: 1, item: object });
+      this.clearSelectionsFor(new Set([objectId])); return;
     }
     const tableIndex = this.table.findIndex(({ id }) => id === objectId);
     if (tableIndex >= 0) {
       const pile = this.table[tableIndex];
       if (scope === 'stack' || !pile.stack?.length) {
         const ids = new Set(pileCards(pile).map(({ id }) => id));
-        this.table.splice(tableIndex, 1); this.clearSelectionsFor(ids); return;
+        this.table.splice(tableIndex, 1);
+        this.addTrash({ kind: 'card', zone: 'table', label: pile.name || (pile.stack?.length ? 'Card stack' : 'Card'), count: ids.size, item: pile });
+        this.clearSelectionsFor(ids); return;
       }
-      const removed = this.removeTopCard(tableIndex); this.clearSelectionsFor(new Set([removed.id])); return;
+      const removed = this.removeTopCard(tableIndex);
+      this.addTrash({ kind: 'card', zone: 'table', label: removed.name || 'Card', count: 1, item: { ...removed, x: pile.x, y: pile.y, rotation: pile.rotation || 0 } });
+      this.clearSelectionsFor(new Set([removed.id])); return;
     }
     const player = this.players.get(playerId), handIndex = player?.hand.findIndex(({ id }) => id === objectId) ?? -1;
     if (handIndex >= 0) {
-      player.hand.splice(handIndex, 1); this.clearSelectionsFor(new Set([objectId])); return;
+      const [card] = player.hand.splice(handIndex, 1);
+      this.addTrash({ kind: 'card', zone: 'hand', owner: playerId, label: card.name || 'Private card', count: 1, item: card });
+      this.clearSelectionsFor(new Set([objectId])); return;
     }
     throw new Error('Object is no longer available.');
+  }
+
+  addTrash(entry) {
+    this.trash.unshift({ trashId: crypto.randomUUID(), deletedAt: Date.now(), ...entry });
+  }
+
+  restoreTrash(playerId, trashId) {
+    if (!this.players.has(playerId)) throw new Error('Player not found.');
+    const index = this.trash.findIndex((entry) => entry.trashId === trashId);
+    if (index < 0) throw new Error('That item is no longer in the trash.');
+    const [entry] = this.trash.splice(index, 1), item = entry.item;
+    if (entry.kind === 'object') {
+      this.objects.push(item); this.select(playerId, item.id); return;
+    }
+    if (entry.zone === 'hand' && this.players.has(entry.owner)) {
+      this.players.get(entry.owner).hand.push(item);
+      if (entry.owner === playerId) this.select(playerId, item.id);
+      else this.select(playerId, null);
+      return;
+    }
+    const restored = { ...item, x: clamp(item.x), y: clamp(item.y), rotation: item.rotation || 0 };
+    this.table.push(restored); this.select(playerId, restored.id, restored.stack?.length ? 'stack' : 'top');
   }
 
   clearSelectionsFor(ids) {
@@ -409,6 +441,9 @@ export class GameRoom {
       objects: this.objects,
       background: this.background,
       currentTurn: this.currentTurn,
+      trash: this.trash.map(({ item, ...entry }) => entry.zone === 'hand' && entry.owner !== viewerId
+        ? { ...entry, label: 'Private card', private: true }
+        : { ...entry, item }),
       players: [...this.players.values()].map((player) => ({
         id: player.id, name: player.name, color: player.color,
         handCount: player.hand.length,

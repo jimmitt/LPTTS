@@ -255,13 +255,28 @@ async function runConnectionTest() {
     const groupAfter = await guest.locator('.die').evaluateAll((dice) => dice.map((die) => die.getBoundingClientRect().toJSON()));
     if (groupAfter.some((box, index) => Math.abs((box.x - groupBefore[index].x) - 55) > 8)) throw new Error('Right-drag did not move the selected dice together.');
 
+    await guest.mouse.click(tableBox.x + 12, tableBox.y + 12);
+    await guest.waitForFunction(() => document.querySelector('#trash-object')?.title.startsWith('Open trash'));
+    const deleteDieBox = await guest.locator('.die').first().boundingBox();
+    await guest.mouse.click(deleteDieBox.x + deleteDieBox.width / 2, deleteDieBox.y + deleteDieBox.height / 2);
+    await guest.waitForFunction(() => document.querySelector('#trash-object')?.title === 'Delete selected object');
+    await guest.click('#trash-object');
+    await guest.waitForFunction(() => document.querySelectorAll('.die').length === 1 && document.querySelector('#trash-object')?.title === 'Open trash (1)');
+    await guest.click('#trash-object');
+    await guest.waitForSelector('#trash-dialog[open] .trash-item');
+    const trashText = await guest.locator('#trash-dialog .trash-item').textContent();
+    if (!trashText.includes('D6')) throw new Error('Deleted die was not listed in the trash dialog.');
+    await guest.click('#trash-dialog [data-restore-trash]');
+    await guest.waitForFunction(() => document.querySelectorAll('.die').length === 2 && document.querySelector('.trash-empty'));
+    await guest.click('[data-close="trash-dialog"]');
+
     await guest.reload();
     await guest.waitForSelector('#lobby:not([hidden])');
     await guest.waitForSelector('#resume-button:not([hidden])');
     await guest.click('#resume-button');
     await guest.waitForSelector('#game:not([hidden])');
     await guest.waitForFunction(() => document.querySelector('#hand-count')?.textContent === '2');
-    console.log('E2E passed: turns, 85% stacking, stack layouts, D6 pips, die roll gestures, box selection, group rolls, pan, chat, and resume');
+    console.log('E2E passed: turns, stacking/layouts, dice/groups, recoverable trash, pan, chat, and resume');
     await hostContext.close(); await guestContext.close();
   } finally {
     await browser.close(); await server.close();
