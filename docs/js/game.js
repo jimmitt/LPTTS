@@ -19,7 +19,8 @@ export class GameRoom {
     const room = new GameRoom(String(data.code || ''));
     room.players = new Map(data.players.map((player) => [player.id, player]));
     room.table = data.table;
-    room.deck = data.deck;
+    room.deck = [];
+    if (data.deck.length) room.table.push(makePile(data.deck.map((card) => ({ ...card, owner: null, faceUp: false })), { x: 78, y: 72, rotation: 0 }));
     room.selections = new Map(Array.isArray(data.selections) ? data.selections : []);
     room.selectionScopes = new Map(Array.isArray(data.selectionScopes) ? data.selectionScopes : []);
     room.objects = Array.isArray(data.objects) ? data.objects : [];
@@ -43,10 +44,15 @@ export class GameRoom {
 
   leave(id) { this.players.delete(id); this.selections.delete(id); this.selectionScopes.delete(id); }
 
-  importDeck(cards) {
+  importDeck(cards, playerId = null) {
     if (cards.length > 1000) throw new Error('Decks are limited to 1,000 cards.');
-    this.deck = cards.map((card) => ({ ...card, owner: null }));
-    this.selections.clear(); this.selectionScopes.clear();
+    if (!cards.length) throw new Error('A deck needs at least one card.');
+    if (playerId && !this.players.has(playerId)) throw new Error('Player not found.');
+    const offset = this.table.length % 5;
+    const pile = makePile(cards.map((card) => ({ ...card, owner: null, faceUp: false })), { x: 68 + offset * 3, y: 62 + offset * 2, rotation: 0 });
+    this.table.push(pile);
+    if (playerId) this.select(playerId, pile.id, 'stack');
+    return pile;
   }
 
   shuffle(playerId = null) {

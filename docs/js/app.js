@@ -1,14 +1,15 @@
-import { GameRoom } from './game.js?v=6';
+import { GameRoom } from './game.js?v=7';
 import { parseTtsDeck } from './tts.js';
 import { createImageDeck } from './image-deck.js?v=2';
+import { createStandardDeck } from './standard-deck.js?v=1';
 import { RelaySession } from './relay.js?v=2';
 
 const $ = (selector) => document.querySelector(selector);
 const ui = {
   lobby: $('#lobby'), game: $('#game'), hostButton: $('#host-button'), name: $('#name'), status: $('#lobby-status'),
   players: $('#players'), playerCount: $('#player-count'), connections: $('#connections'), connection: $('#connection'),
-  tableCards: $('#table-cards'), tableObjects: $('#table-objects'), table: $('#table'), tableSurface: $('#table-surface'), tableBoard: $('#table-board'), empty: $('#empty-table'), deck: $('#deck'), deckCount: $('.deck-count'),
-  deckLabel: $('#deck-label'), shuffle: $('#shuffle'), hand: $('#hand'), handCount: $('#hand-count'), file: $('#tts-file'),
+  tableCards: $('#table-cards'), tableObjects: $('#table-objects'), table: $('#table'), tableSurface: $('#table-surface'), tableBoard: $('#table-board'), empty: $('#empty-table'),
+  hand: $('#hand'), handCount: $('#hand-count'), file: $('#tts-file'),
   toast: $('#toast'), dialog: $('#connect-dialog'), hostPanel: $('#connect-host'), guestPanel: $('#connect-guest')
 };
 let role = '', playerId = '', state, room, relay;
@@ -33,15 +34,15 @@ $('#copy-room-link').addEventListener('click', () => copy($('#room-link').value,
 document.querySelectorAll('[data-close]').forEach((button) => button.addEventListener('click', () => $(`#${button.dataset.close}`).close()));
 $('#help').addEventListener('click', () => $('#help-dialog').showModal());
 $('#import-button').addEventListener('click', () => role === 'host' ? ui.file.click() : toast('Only the host can import a deck', true));
+$('#standard-deck-button').addEventListener('click', addStandardDeck);
 $('#image-deck-button').addEventListener('click', () => role === 'host' ? $('#image-deck-dialog').showModal() : toast('Only the host can create a deck', true));
 $('#image-deck-form').addEventListener('submit', createUploadedDeck);
 $('#face-file').addEventListener('change', updateImageSummary);
 $('#back-file').addEventListener('change', updateImageSummary);
 ui.file.addEventListener('change', importDeck);
-ui.deck.addEventListener('click', () => { clearLocalSelection(); action('draw'); });
-ui.shuffle.addEventListener('click', () => { clearLocalSelection(); action('shuffle'); });
 $('#table').addEventListener('pointerdown', clearSelectionFromTable);
-$('#table').addEventListener('pointerdown', panTable);
+$('#table').addEventListener('mousedown', panTable);
+$('#table').addEventListener('auxclick', (event) => { if (event.button === 1) event.preventDefault(); });
 $('#table').addEventListener('wheel', zoomTable, { passive: false });
 $('#deal-form').addEventListener('submit', submitDeal);
 $('#add-die').addEventListener('click', () => $('#dice-dialog').showModal());
@@ -184,7 +185,7 @@ function updateHost() {
 }
 
 async function importDeck() {
-  try { const cards = parseTtsDeck(await ui.file.files[0].text()); room.importDeck(cards); updateHost(); toast(`Imported ${cards.length} cards`); }
+  try { const cards = parseTtsDeck(await ui.file.files[0].text()); room.importDeck(cards, playerId); updateHost(); toast(`Placed a ${cards.length}-card stack`); }
   catch (error) { toast(error.message, true); }
   finally { ui.file.value = ''; }
 }
@@ -203,8 +204,13 @@ async function createUploadedDeck(event) {
     const face = await upload(faceFile, 'card faces');
     const back = await upload(backFile, 'card back');
     const cards = createImageDeck({ name: $('#deck-name').value, face, back, columns: $('#deck-columns').value, rows: $('#deck-rows').value, count: $('#deck-card-count').value });
-    room.importDeck(cards); updateHost(); $('#image-deck-dialog').close(); status.textContent = ''; toast(`Created ${cards.length} cards`);
+    room.importDeck(cards, playerId); updateHost(); $('#image-deck-dialog').close(); status.textContent = ''; toast(`Placed a ${cards.length}-card stack`);
   } catch (error) { status.textContent = error.message; }
+}
+
+function addStandardDeck() {
+  if (role !== 'host') return toast('Only the host can add a deck', true);
+  room.importDeck(createStandardDeck(), playerId); updateHost(); toast('Placed a standard 52-card deck');
 }
 
 async function updateImageSummary() {
@@ -228,10 +234,6 @@ function render() {
   const me = state.players.find((player) => player.id === playerId);
   ui.handCount.textContent = me?.handCount || 0;
   ui.hand.replaceChildren(...(me?.hand || []).map(handCard));
-  ui.deckCount.textContent = state.deckCount;
-  ui.deckLabel.textContent = state.deckCount ? `${state.deckCount} cards` : 'No deck';
-  ui.deck.disabled = !state.deckCount; ui.shuffle.disabled = !state.deckCount;
-  ui.deck.style.backgroundImage = state.deckBack ? `url("${cssUrl(state.deckBack)}")` : '';
   ui.tableBoard.style.backgroundImage = state.background ? `url("${cssUrl(state.background)}")` : '';
   ui.tableBoard.hidden = !state.background;
   ui.tableCards.replaceChildren(...state.table.map(tableCard));
@@ -392,18 +394,22 @@ function zoomTable(event) {
 
 function panTable(event) {
   if (event.button !== 1) return;
-  event.preventDefault(); ui.table.setPointerCapture(event.pointerId); ui.table.classList.add('panning');
+  event.preventDefault(); event.stopPropagation(); ui.table.classList.add('panning');
   const start = { x: event.clientX, y: event.clientY, panX: tablePanX, panY: tablePanY };
   const move = (e) => {
+    if (!(e.buttons & 4)) return finish();
+    e.preventDefault();
     const box = ui.table.getBoundingClientRect(), maxX = box.width * .75, maxY = box.height * .75;
     tablePanX = Math.max(-maxX, Math.min(maxX, start.panX + e.clientX - start.x));
     tablePanY = Math.max(-maxY, Math.min(maxY, start.panY + e.clientY - start.y));
     applyTableTransform();
   };
   const finish = () => {
-    ui.table.classList.remove('panning'); ui.table.removeEventListener('pointermove', move); ui.table.removeEventListener('pointerup', finish); ui.table.removeEventListener('pointercancel', finish);
+    ui.table.classList.remove('panning'); window.removeEventListener('mousemove', move, true); window.removeEventListener('mouseup', finish, true); window.removeEventListener('blur', finish);
   };
-  ui.table.addEventListener('pointermove', move); ui.table.addEventListener('pointerup', finish, { once: true }); ui.table.addEventListener('pointercancel', finish, { once: true });
+  window.addEventListener('mousemove', move, { capture: true, passive: false });
+  window.addEventListener('mouseup', finish, { capture: true, once: true });
+  window.addEventListener('blur', finish, { once: true });
 }
 
 function applyTableTransform() { ui.tableSurface.style.transform = `translate(${tablePanX}px,${tablePanY}px) scale(${tableZoom})`; }
@@ -412,7 +418,7 @@ function pointInside(element, x, y) {
   const box = element.getBoundingClientRect();
   return x >= box.left && x <= box.right && y >= box.top && y <= box.bottom;
 }
-function cardElement(card, faceUp) { const el = document.createElement('div'); el.className = 'card'; if (faceUp && card.face) { const face = document.createElement('div'); face.className = 'card-face'; const { index = 0, width = 1, height = 1 } = card.sheet || {}; face.style.backgroundImage = `url("${cssUrl(card.face)}")`; face.style.backgroundSize = `${width * 100}% ${height * 100}%`; face.style.backgroundPosition = `${width > 1 ? (index % width) / (width - 1) * 100 : 0}% ${height > 1 ? Math.floor(index / width) / (height - 1) * 100 : 0}%`; el.append(face); } else { const back = document.createElement('div'); back.className = 'card-back'; if (card.back) { back.style.backgroundImage = `url("${cssUrl(card.back)}")`; back.style.backgroundSize = 'cover'; back.textContent = ''; } else back.textContent = 'LPTTS'; el.append(back); } return el; }
+function cardElement(card, faceUp) { const el = document.createElement('div'); el.className = 'card'; if (faceUp && card.standard) { const face = document.createElement('div'), corner = document.createElement('span'), center = document.createElement('strong'); face.className = `standard-card-face ${['♥','♦'].includes(card.standard.suit) ? 'red' : ''}`; corner.textContent = `${card.standard.rank}\n${card.standard.suit}`; center.textContent = card.standard.suit; face.append(corner, center); el.append(face); } else if (faceUp && card.face) { const face = document.createElement('div'); face.className = 'card-face'; const { index = 0, width = 1, height = 1 } = card.sheet || {}; face.style.backgroundImage = `url("${cssUrl(card.face)}")`; face.style.backgroundSize = `${width * 100}% ${height * 100}%`; face.style.backgroundPosition = `${width > 1 ? (index % width) / (width - 1) * 100 : 0}% ${height > 1 ? Math.floor(index / width) / (height - 1) * 100 : 0}%`; el.append(face); } else { const back = document.createElement('div'); back.className = 'card-back'; if (card.back) { back.style.backgroundImage = `url("${cssUrl(card.back)}")`; back.style.backgroundSize = 'cover'; back.textContent = ''; } else back.textContent = 'LPTTS'; el.append(back); } el.setAttribute('aria-label', card.name || 'Card'); return el; }
 
 function bindCardKeys(element, card, faceUp, zone) {
   element.addEventListener('pointerenter', () => {
@@ -512,7 +518,7 @@ function clearLocalSelection() {
 
 function clearSelectionFromTable(event) {
   if (event.button !== 0) return;
-  if (event.target.closest('.card,.table-object,.deck-zone')) return;
+  if (event.target.closest('.card,.table-object,.table-tools')) return;
   clearSelection();
 }
 

@@ -70,6 +70,7 @@ async function runConnectionTest() {
     await host.waitForSelector('#connect-dialog[open]');
     const code = await host.inputValue('#room-code');
     if (code !== 'ROOM42') throw new Error(`Unexpected room code: ${code}`);
+    await host.click('[data-close="connect-dialog"]');
 
     await guest.fill('#name', 'Bob');
     await guest.click('#join-button');
@@ -90,9 +91,11 @@ async function runConnectionTest() {
 
     const deck = { ObjectStates: [{ Name: 'DeckCustom', Nickname: 'Test deck', CustomDeck: { 1: { FaceURL: 'https://example.com/faces.jpg', BackURL: 'https://example.com/back.jpg', NumWidth: 3, NumHeight: 1 } }, DeckIDs: [100, 101, 102], ContainedObjects: [{ Name: 'CardCustom', Nickname: 'Ace', CardID: 100 }, { Name: 'CardCustom', Nickname: 'King', CardID: 101 }, { Name: 'CardCustom', Nickname: 'Queen', CardID: 102 }] }] };
     await host.setInputFiles('#tts-file', { name: 'deck.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(deck)) });
-    await host.waitForFunction(() => document.querySelector('#deck-label')?.textContent === '3 cards');
-    await guest.waitForFunction(() => document.querySelector('#deck-label')?.textContent === '3 cards');
-    await guest.click('#deck');
+    await host.waitForFunction(() => document.querySelector('.stack-count')?.textContent === '3');
+    await guest.waitForFunction(() => document.querySelector('.stack-count')?.textContent === '3');
+    if (await guest.locator('#deck').count()) throw new Error('The dedicated draw pile is still visible.');
+    await guest.hover('#table-cards .card-stack');
+    await guest.keyboard.press('h');
     await guest.waitForFunction(() => document.querySelector('#hand-count')?.textContent === '1');
     await guest.hover('#hand .card');
     await guest.keyboard.down('z');
@@ -105,23 +108,24 @@ async function runConnectionTest() {
     await guest.keyboard.up('z');
     await guest.waitForFunction(() => document.querySelector('#card-zoom')?.hidden);
     await guest.press('#hand .card', 'f');
-    await guest.waitForSelector('#hand .card-back');
+    await guest.waitForSelector('#hand .card-face');
     const handCardBox = await guest.locator('#hand .card').boundingBox();
     const tableBox = await guest.locator('#table').boundingBox();
     await guest.mouse.move(handCardBox.x + handCardBox.width / 2, handCardBox.y + handCardBox.height / 2);
     await guest.mouse.down();
     await guest.mouse.move(tableBox.x + tableBox.width / 2, tableBox.y + tableBox.height / 2, { steps: 8 });
     await guest.mouse.up();
-    await guest.waitForSelector('#table-cards .card-back');
+    await guest.waitForSelector('#table-cards .card-face');
     await guest.waitForFunction(() => document.querySelector('#hand-count')?.textContent === '0');
-    const tableCardBox = await guest.locator('#table-cards .card').boundingBox();
+    await guest.waitForFunction(() => document.querySelector('#table-cards')?.children.length === 2);
+    const tableCardBox = await guest.locator('#table-cards .card:not(.card-stack)').boundingBox();
     const handPanelBox = await guest.locator('.hand-panel').boundingBox();
     await guest.mouse.move(tableCardBox.x + tableCardBox.width / 2, tableCardBox.y + tableCardBox.height / 2);
     await guest.mouse.down();
     await guest.mouse.move(handPanelBox.x + handPanelBox.width / 2, handPanelBox.y + handPanelBox.height / 2, { steps: 8 });
     await guest.mouse.up();
-    await guest.waitForSelector('#hand .card-back');
-    await guest.waitForFunction(() => document.querySelector('#table-cards')?.children.length === 0);
+    await guest.waitForSelector('#hand .card-face');
+    await guest.waitForFunction(() => document.querySelector('#table-cards')?.children.length === 1 && document.querySelector('.stack-count')?.textContent === '2');
 
     const panStart = { x: tableBox.x + tableBox.width / 2, y: tableBox.y + tableBox.height / 2 };
     await guest.mouse.move(panStart.x, panStart.y);
@@ -130,25 +134,6 @@ async function runConnectionTest() {
     await guest.mouse.up({ button: 'middle' });
     const tableTransform = await guest.locator('#table-surface').evaluate((surface) => surface.style.transform);
     if (!tableTransform.includes('translate(70px, 45px)')) throw new Error(`Middle-button table pan was not applied: ${tableTransform}`);
-
-    await guest.click('#deck');
-    await guest.waitForFunction(() => document.querySelector('#hand-count')?.textContent === '2');
-    await guest.click('#deck');
-    await guest.waitForFunction(() => document.querySelector('#hand-count')?.textContent === '3');
-    const stackX = tableBox.x + tableBox.width * .42, stackY = tableBox.y + tableBox.height * .48;
-    let handBox = await guest.locator('#hand .card').nth(1).boundingBox();
-    await guest.mouse.move(handBox.x + handBox.width / 2, handBox.y + handBox.height / 2);
-    await guest.mouse.down();
-    await guest.mouse.move(stackX, stackY, { steps: 8 });
-    await guest.mouse.up();
-    await guest.waitForFunction(() => document.querySelector('#table-cards')?.children.length === 1);
-    handBox = await guest.locator('#hand .card').nth(1).boundingBox();
-    const firstCardBox = await guest.locator('#table-cards .card').boundingBox();
-    await guest.mouse.move(handBox.x + handBox.width / 2, handBox.y + handBox.height / 2);
-    await guest.mouse.down();
-    await guest.mouse.move(firstCardBox.x + firstCardBox.width / 2, firstCardBox.y + firstCardBox.height / 2, { steps: 8 });
-    await guest.mouse.up();
-    await guest.waitForFunction(() => document.querySelector('.stack-count')?.textContent === '2');
 
     let stackBox = await guest.locator('#table-cards .card').boundingBox();
     await guest.mouse.move(stackBox.x + stackBox.width / 2, stackBox.y + stackBox.height / 2);
@@ -174,13 +159,24 @@ async function runConnectionTest() {
     const movedStackBox = await guest.locator('#table-cards .card').boundingBox();
     if (await guest.locator('#table-cards .card').count() !== 1 || Math.abs(movedStackBox.x - stackBox.x) < 80) throw new Error('Right-drag did not move the whole stack together.');
 
+    await host.click('#standard-deck-button');
+    await guest.waitForFunction(() => [...document.querySelectorAll('.stack-count')].some((badge) => badge.textContent === '52'));
+    const standardStack = guest.locator('#table-cards .card-stack').filter({ hasText: '52' });
+    await standardStack.hover();
+    await guest.keyboard.press('h');
+    await guest.waitForFunction(() => document.querySelector('#hand-count')?.textContent === '2');
+    const standardCard = guest.locator('#hand .card[aria-label="King of Spades"]');
+    await standardCard.hover();
+    await guest.keyboard.press('f');
+    await standardCard.locator('.standard-card-face').waitFor();
+
     await guest.reload();
     await guest.waitForSelector('#lobby:not([hidden])');
     await guest.waitForSelector('#resume-button:not([hidden])');
     await guest.click('#resume-button');
     await guest.waitForSelector('#game:not([hidden])');
-    await guest.waitForFunction(() => document.querySelector('#hand-count')?.textContent === '1');
-    console.log('E2E passed: card zoom/flip, hand drag, stack left/right drag, table pan, chat, multiplayer state, and resume');
+    await guest.waitForFunction(() => document.querySelector('#hand-count')?.textContent === '2');
+    console.log('E2E passed: imported table stack, standard deck, stack drag, robust middle-button pan, chat, and resume');
     await hostContext.close(); await guestContext.close();
   } finally {
     await browser.close(); await server.close();
