@@ -7,6 +7,7 @@ export class GameRoom {
     this.table = [];
     this.deck = [];
     this.selections = new Map();
+    this.selectionScopes = new Map();
     this.objects = [];
     this.background = '';
   }
@@ -20,13 +21,14 @@ export class GameRoom {
     room.table = data.table;
     room.deck = data.deck;
     room.selections = new Map(Array.isArray(data.selections) ? data.selections : []);
+    room.selectionScopes = new Map(Array.isArray(data.selectionScopes) ? data.selectionScopes : []);
     room.objects = Array.isArray(data.objects) ? data.objects : [];
     room.background = typeof data.background === 'string' ? data.background : '';
     return room;
   }
 
   serialize() {
-    return { code: this.code, players: [...this.players.values()], table: this.table, deck: this.deck, selections: [...this.selections], objects: this.objects, background: this.background };
+    return { code: this.code, players: [...this.players.values()], table: this.table, deck: this.deck, selections: [...this.selections], selectionScopes: [...this.selectionScopes], objects: this.objects, background: this.background };
   }
 
   join(id, name) {
@@ -39,12 +41,12 @@ export class GameRoom {
     });
   }
 
-  leave(id) { this.players.delete(id); this.selections.delete(id); }
+  leave(id) { this.players.delete(id); this.selections.delete(id); this.selectionScopes.delete(id); }
 
   importDeck(cards) {
     if (cards.length > 1000) throw new Error('Decks are limited to 1,000 cards.');
     this.deck = cards.map((card) => ({ ...card, owner: null }));
-    this.selections.clear();
+    this.selections.clear(); this.selectionScopes.clear();
   }
 
   shuffle(playerId = null) {
@@ -71,7 +73,7 @@ export class GameRoom {
     if (targetId && !this.table.some((card) => card.id === targetId)) throw new Error('Stack target is no longer on the table.');
     const [card] = player.hand.splice(index, 1);
     this.table.push({ ...card, owner: playerId, x: clamp(x), y: clamp(y), faceUp: card.faceUp !== false, rotation: 0 });
-    this.select(playerId, card.id);
+    this.select(playerId, card.id, targetId ? 'stack' : 'top');
     if (targetId) this.stack(playerId, card.id, targetId);
   }
 
@@ -79,7 +81,7 @@ export class GameRoom {
     const card = this.table.find((item) => item.id === cardId);
     if (!card) throw new Error('Card not found.');
     card.x = clamp(x); card.y = clamp(y);
-    this.select(playerId, cardId);
+    this.select(playerId, cardId, card.stack?.length ? 'stack' : 'top');
   }
 
   take(playerId, cardId) {
@@ -105,17 +107,37 @@ export class GameRoom {
     this.select(playerId, cardId);
   }
 
-  select(playerId, cardId) {
+  flipStack(cardId, playerId) {
+    const card = this.table.find((item) => item.id === cardId);
+    if (!card) throw new Error('Stack is no longer on the table.');
+    if (!card.stack?.length) return this.flip(cardId, playerId);
+    card.faceUp = !card.faceUp;
+    card.stack.forEach((stackedCard) => { stackedCard.faceUp = card.faceUp; });
+    this.select(playerId, cardId, 'stack');
+  }
+
+  handToggle(playerId, cardId) {
+    if (this.table.some(({ id }) => id === cardId)) return this.take(playerId, cardId);
+    const player = this.players.get(playerId), handCard = player?.hand.find(({ id }) => id === cardId);
+    if (!handCard) throw new Error('Card is no longer available.');
+    const players = [...this.players.keys()], playerIndex = players.indexOf(playerId);
+    const position = frontPosition(playerIndex, players.length, this.table.length);
+    this.play(playerId, cardId, position.x, position.y);
+  }
+
+  select(playerId, cardId, scope = 'top') {
     if (!this.players.has(playerId)) throw new Error('Player not found.');
-    this.selections.delete(playerId);
+    this.selections.delete(playerId); this.selectionScopes.delete(playerId);
     if (!cardId) return;
     const ownHand = this.players.get(playerId).hand;
-    const exists = this.table.some(({ id }) => id === cardId) || this.objects.some(({ id }) => id === cardId) || ownHand.some(({ id }) => id === cardId);
+    const tableItem = this.table.find(({ id }) => id === cardId);
+    const exists = tableItem || this.objects.some(({ id }) => id === cardId) || ownHand.some(({ id }) => id === cardId);
     if (!exists) throw new Error('Object is no longer available.');
+    const selectionScope = scope === 'stack' && tableItem?.stack?.length ? 'stack' : 'top';
     for (const [otherPlayer, selectedCard] of this.selections) {
-      if (selectedCard === cardId) this.selections.delete(otherPlayer);
+      if (selectedCard === cardId) { this.selections.delete(otherPlayer); this.selectionScopes.delete(otherPlayer); }
     }
-    this.selections.set(playerId, cardId);
+    this.selections.set(playerId, cardId); this.selectionScopes.set(playerId, selectionScope);
   }
 
   setBackground(playerId, url) {
@@ -157,7 +179,7 @@ export class GameRoom {
     return die.value;
   }
 
-  destroy(playerId, objectId) {
+  destroy(playerId, objectId, scope = 'top') {
     if (!this.players.has(playerId)) throw new Error('Player not found.');
     const objectIndex = this.objects.findIndex(({ id }) => id === objectId);
     if (objectIndex >= 0) {
@@ -165,8 +187,12 @@ export class GameRoom {
     }
     const tableIndex = this.table.findIndex(({ id }) => id === objectId);
     if (tableIndex >= 0) {
-      const ids = new Set(pileCards(this.table[tableIndex]).map(({ id }) => id));
-      this.table.splice(tableIndex, 1); this.clearSelectionsFor(ids); return;
+      const pile = this.table[tableIndex];
+      if (scope === 'stack' || !pile.stack?.length) {
+        const ids = new Set(pileCards(pile).map(({ id }) => id));
+        this.table.splice(tableIndex, 1); this.clearSelectionsFor(ids); return;
+      }
+      const removed = this.removeTopCard(tableIndex); this.clearSelectionsFor(new Set([removed.id])); return;
     }
     const player = this.players.get(playerId), handIndex = player?.hand.findIndex(({ id }) => id === objectId) ?? -1;
     if (handIndex >= 0) {
@@ -177,7 +203,7 @@ export class GameRoom {
 
   clearSelectionsFor(ids) {
     for (const [selectedPlayer, selectedId] of this.selections) {
-      if (ids.has(selectedId)) this.selections.delete(selectedPlayer);
+      if (ids.has(selectedId)) { this.selections.delete(selectedPlayer); this.selectionScopes.delete(selectedPlayer); }
     }
   }
 
@@ -191,7 +217,7 @@ export class GameRoom {
     const nextTable = this.table.filter((_, index) => index !== sourceIndex && index !== targetIndex);
     const pile = makePile(cards, { x: target.x, y: target.y, rotation: target.rotation || 0 });
     nextTable.push(pile); this.table = nextTable;
-    this.select(playerId, pile.id);
+    this.select(playerId, pile.id, 'stack');
   }
 
   shuffleStack(playerId, cardId) {
@@ -204,7 +230,7 @@ export class GameRoom {
       [cards[i], cards[j]] = [cards[j], cards[i]];
     }
     this.table[index] = makePile(cards, { x: current.x, y: current.y, rotation: current.rotation || 0 });
-    this.select(playerId, this.table[index].id);
+    this.select(playerId, this.table[index].id, 'stack');
   }
 
   dealStack(playerId, cardId, countEach, destination, faceUp) {
@@ -228,7 +254,7 @@ export class GameRoom {
     if (cards.length) this.table[index] = makePile(cards, { x: current.x, y: current.y, rotation: current.rotation || 0 });
     else this.table.splice(index, 1);
     this.table.push(...dealtToTable);
-    this.select(playerId, cards.length ? this.table[index].id : null);
+    this.select(playerId, cards.length ? this.table[index].id : null, 'stack');
   }
 
   removeTopCard(index) {
@@ -245,6 +271,7 @@ export class GameRoom {
       deckBack: this.deck.length ? this.deck[this.deck.length - 1].back || '' : '',
       table: this.table,
       selections: [...this.selections],
+      selectionScopes: [...this.selectionScopes],
       objects: this.objects,
       background: this.background,
       players: [...this.players.values()].map((player) => ({
@@ -265,4 +292,9 @@ function dealPosition(playerIndex, playerCount, round, count) {
   const angle = Math.PI / 2 + (Math.PI * 2 * playerIndex / playerCount);
   const spread = (round - (count - 1) / 2) * 4;
   return { x: clamp(50 + Math.cos(angle) * 34 + spread), y: clamp(50 + Math.sin(angle) * 32), rotation: 0 };
+}
+function frontPosition(playerIndex, playerCount, tableCount) {
+  const position = dealPosition(playerIndex, playerCount, 0, 1);
+  position.x = clamp(position.x + ((tableCount % 5) - 2) * 3);
+  return position;
 }

@@ -86,7 +86,7 @@ function renderObservation(data) {
     el.append(name, meta); return el;
   }));
   const state = data.state; $('#no-snapshot').hidden = Boolean(state);
-  const felt = $('#observe-table'); felt.style.backgroundImage = state?.background ? `url("${cssUrl(state.background)}")` : ''; felt.classList.toggle('has-background', Boolean(state?.background));
+  const board = $('#observe-board'); board.style.backgroundImage = state?.background ? `url("${cssUrl(state.background)}")` : ''; board.hidden = !state?.background;
   $('#observe-cards').replaceChildren(...(state?.table || []).map((card) => observeCard(card, state)), ...(state?.objects || []).map((object) => observeObject(object, state)));
   const deck = $('#observe-deck'); deck.hidden = !state?.deckCount; $('#observe-deck-count').textContent = state?.deckCount || '';
   deck.style.backgroundImage = state?.deckBack ? `url("${cssUrl(state.deckBack)}")` : '';
@@ -96,7 +96,7 @@ function observeCard(card, state) {
   const el = document.createElement('div'); el.className = 'observe-card'; el.style.left = `${card.x}%`; el.style.top = `${card.y}%`; el.style.transform = `translate(-50%,-50%) rotate(${Number(card.rotation) || 0}deg)`;
   const selected = (state.selections || []).find(([, selectedCard]) => selectedCard === card.id);
   const player = selected && state.players.find(({ id }) => id === selected[0]);
-  if (player) el.style.outline = `4px solid ${player.color}`;
+  if (player) { const scope = (state.selectionScopes || []).find(([id]) => id === player.id)?.[1]; el.style.outline = `${scope === 'stack' ? '7px double' : '4px solid'} ${player.color}`; }
   if (card.faceUp !== false && card.face) {
     const face = document.createElement('div'); face.className = 'observe-card-face';
     const { index = 0, width = 1, height = 1 } = card.sheet || {};
