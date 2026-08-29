@@ -97,7 +97,6 @@ function observeCard(card) {
     const face = document.createElement('div'); face.className = 'observe-card-face';
     const { index = 0, width = 1, height = 1 } = card.sheet || {};
     face.style.backgroundImage = `url("${cssUrl(card.face)}")`; face.style.backgroundSize = `${width * 100}% ${height * 100}%`; face.style.backgroundPosition = `${width > 1 ? (index % width) / (width - 1) * 100 : 0}% ${height > 1 ? Math.floor(index / width) / (height - 1) * 100 : 0}%`; el.append(face);
-    const name = document.createElement('span'); name.className = 'observe-card-name'; name.textContent = card.name || ''; el.append(name);
   } else {
     const back = document.createElement('div'); back.className = 'observe-card-back'; if (card.back) back.style.backgroundImage = `url("${cssUrl(card.back)}")`; el.append(back);
   }
