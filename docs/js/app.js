@@ -1,4 +1,4 @@
-import { GameRoom } from './game.js?v=2';
+import { GameRoom } from './game.js?v=3';
 import { parseTtsDeck } from './tts.js';
 import { createImageDeck } from './image-deck.js?v=2';
 import { RelaySession } from './relay.js?v=2';
@@ -14,6 +14,7 @@ const ui = {
 let role = '', playerId = '', state, room, relay;
 let savedRelay;
 let hoveredCard = null, zoomHeld = false;
+let pendingDealCardId = '';
 const remotePlayers = new Set();
 const seenChat = new Set();
 const HOST_STATE_KEY = 'lptts-host-state-v1';
@@ -36,8 +37,10 @@ $('#image-deck-form').addEventListener('submit', createUploadedDeck);
 $('#face-file').addEventListener('change', updateImageSummary);
 $('#back-file').addEventListener('change', updateImageSummary);
 ui.file.addEventListener('change', importDeck);
-ui.deck.addEventListener('click', () => action('draw'));
-ui.shuffle.addEventListener('click', () => action('shuffle'));
+ui.deck.addEventListener('click', () => { clearLocalSelection(); action('draw'); });
+ui.shuffle.addEventListener('click', () => { clearLocalSelection(); action('shuffle'); });
+$('#table').addEventListener('pointerdown', clearSelectionFromTable);
+$('#deal-form').addEventListener('submit', submitDeal);
 $('#chat-toggle').addEventListener('click', toggleChat);
 $('#chat-minimize').addEventListener('click', toggleChat);
 $('#chat-form').addEventListener('submit', sendChat);
@@ -130,11 +133,15 @@ function action(type, body = {}) {
 function applyHostAction(actor, type, body) {
   try {
     if (type === 'draw') room.draw(actor);
-    else if (type === 'shuffle') room.shuffle();
-    else if (type === 'play') room.play(actor, body.cardId, body.x, body.y);
+    else if (type === 'shuffle') room.shuffle(actor);
+    else if (type === 'play') room.play(actor, body.cardId, body.x, body.y, body.targetId || null);
     else if (type === 'take') room.take(actor, body.cardId);
     else if (type === 'flip') room.flip(body.cardId, actor);
     else if (type === 'move') room.move(actor, body.cardId, body.x, body.y);
+    else if (type === 'select') room.select(actor, body.cardId || null);
+    else if (type === 'stack') room.stack(actor, body.sourceId, body.targetId);
+    else if (type === 'shuffleStack') room.shuffleStack(actor, body.cardId);
+    else if (type === 'dealStack') room.dealStack(actor, body.cardId, body.countEach, body.destination, body.faceUp);
     else throw new Error('Unknown action.');
     updateHost();
   } catch (error) {
@@ -210,7 +217,8 @@ function render() {
 function handCard(card) {
   const faceUp = card.faceUp !== false, el = cardElement(card, faceUp);
   el.title = 'Drag to table · Double-click to play · Z zoom · F flip';
-  bindCardKeys(el, card, faceUp);
+  el.dataset.cardId = card.id; applyCardSelection(el, card.id);
+  bindCardKeys(el, card, faceUp, 'hand');
   el.addEventListener('pointerdown', (event) => dragFromHand(event, el, card));
   el.addEventListener('dblclick', () => action('play', { cardId: card.id, x: 45 + Math.random() * 10, y: 42 + Math.random() * 8 }));
   return el;
@@ -220,8 +228,11 @@ function tableCard(card, index) {
   const el = cardElement(card, card.faceUp);
   el.classList.add('table-card'); el.style.left = `${card.x}%`; el.style.top = `${card.y}%`; el.style.zIndex = index + 1;
   el.style.transform = `translate(-50%,-50%) rotate(${card.rotation || 0}deg)`;
-  el.title = 'Drag to move or return to hand · Z zoom · F flip';
-  bindCardKeys(el, card, card.faceUp);
+  el.dataset.cardId = card.id; applyCardSelection(el, card.id);
+  const count = 1 + (card.stack?.length || 0);
+  el.title = count > 1 ? `${count}-card stack · S shuffle · D deal · Drag onto a card to combine` : 'Drag onto another card to stack · Z zoom · F flip';
+  if (count > 1) { el.classList.add('card-stack'); const badge = document.createElement('span'); badge.className = 'stack-count'; badge.textContent = count; el.append(badge); }
+  bindCardKeys(el, card, card.faceUp, 'table');
   el.addEventListener('dblclick', () => action('flip', { cardId: card.id }));
   el.addEventListener('contextmenu', (event) => { event.preventDefault(); action('take', { cardId: card.id }); });
   el.addEventListener('pointerdown', (event) => dragTableCard(event, el, card));
@@ -230,10 +241,10 @@ function tableCard(card, index) {
 
 function dragFromHand(event, el, card) {
   if (event.button !== 0) return;
-  event.preventDefault(); el.setPointerCapture(event.pointerId);
+  event.preventDefault(); markLocalSelection(el); el.setPointerCapture(event.pointerId);
   const start = { x: event.clientX, y: event.clientY };
   const table = $('#table');
-  let dragging = false, ghost;
+  let dragging = false, ghost, stackTarget;
   const move = (e) => {
     if (!dragging && Math.hypot(e.clientX - start.x, e.clientY - start.y) < 6) return;
     if (!dragging) {
@@ -242,14 +253,17 @@ function dragFromHand(event, el, card) {
     }
     ghost.style.left = `${e.clientX}px`; ghost.style.top = `${e.clientY}px`;
     table.classList.toggle('drop-target', pointInside(table, e.clientX, e.clientY));
+    stackTarget?.classList.remove('stack-target'); stackTarget = findStackTarget(e.clientX, e.clientY);
+    stackTarget?.classList.add('stack-target');
   };
   const finish = (e, cancelled = false) => {
     el.removeEventListener('pointermove', move); el.removeEventListener('pointerup', up); el.removeEventListener('pointercancel', cancel);
-    table.classList.remove('drop-target'); ghost?.remove();
-    if (!cancelled && dragging && pointInside(table, e.clientX, e.clientY)) {
+    table.classList.remove('drop-target'); stackTarget?.classList.remove('stack-target'); ghost?.remove();
+    if (cancelled) { render(); return; }
+    if (dragging && pointInside(table, e.clientX, e.clientY)) {
       const position = tablePosition(e.clientX, e.clientY);
-      action('play', { cardId: card.id, ...position });
-    }
+      action('play', { cardId: card.id, ...position, targetId: stackTarget?.dataset.cardId || null });
+    } else if (!dragging) action('select', { cardId: card.id });
   };
   const up = (e) => finish(e);
   const cancel = (e) => finish(e, true);
@@ -258,23 +272,39 @@ function dragFromHand(event, el, card) {
 
 function dragTableCard(event, el, card) {
   if (event.button !== 0) return;
-  event.preventDefault(); el.setPointerCapture(event.pointerId);
+  event.preventDefault(); markLocalSelection(el); el.setPointerCapture(event.pointerId);
   const handPanel = $('.hand-panel');
+  const start = { x: event.clientX, y: event.clientY };
+  let dragging = false, stackTarget;
   const move = (e) => {
+    if (!dragging && Math.hypot(e.clientX - start.x, e.clientY - start.y) < 5) return;
+    dragging = true;
     const position = tablePosition(e.clientX, e.clientY);
     el.style.left = `${position.x}%`; el.style.top = `${position.y}%`; el.dataset.x = position.x; el.dataset.y = position.y;
     handPanel.classList.toggle('drop-target', pointInside(handPanel, e.clientX, e.clientY));
+    stackTarget?.classList.remove('stack-target'); stackTarget = findStackTarget(e.clientX, e.clientY, el);
+    stackTarget?.classList.add('stack-target');
   };
   const finish = (e, cancelled = false) => {
     el.removeEventListener('pointermove', move); el.removeEventListener('pointerup', up); el.removeEventListener('pointercancel', cancel);
-    handPanel.classList.remove('drop-target');
-    if (cancelled) { el.style.left = `${card.x}%`; el.style.top = `${card.y}%`; return; }
-    if (pointInside(handPanel, e.clientX, e.clientY)) action('take', { cardId: card.id });
+    handPanel.classList.remove('drop-target'); stackTarget?.classList.remove('stack-target');
+    if (cancelled) { render(); return; }
+    if (!dragging) action('select', { cardId: card.id });
+    else if (pointInside(handPanel, e.clientX, e.clientY)) action('take', { cardId: card.id });
+    else if (stackTarget) action('stack', { sourceId: card.id, targetId: stackTarget.dataset.cardId });
     else action('move', { cardId: card.id, x: Number(el.dataset.x) || card.x, y: Number(el.dataset.y) || card.y });
   };
   const up = (e) => finish(e);
   const cancel = (e) => finish(e, true);
   el.addEventListener('pointermove', move); el.addEventListener('pointerup', up, { once: true }); el.addEventListener('pointercancel', cancel, { once: true });
+}
+
+function findStackTarget(x, y, source = null) {
+  for (const node of document.elementsFromPoint(x, y)) {
+    const card = node.closest?.('.table-card');
+    if (card && card !== source && !source?.contains(node)) return card;
+  }
+  return null;
 }
 
 function tablePosition(clientX, clientY) {
@@ -291,9 +321,9 @@ function pointInside(element, x, y) {
 }
 function cardElement(card, faceUp) { const el = document.createElement('div'); el.className = 'card'; if (faceUp && card.face) { const face = document.createElement('div'); face.className = 'card-face'; const { index = 0, width = 1, height = 1 } = card.sheet || {}; face.style.backgroundImage = `url("${cssUrl(card.face)}")`; face.style.backgroundSize = `${width * 100}% ${height * 100}%`; face.style.backgroundPosition = `${width > 1 ? (index % width) / (width - 1) * 100 : 0}% ${height > 1 ? Math.floor(index / width) / (height - 1) * 100 : 0}%`; el.append(face); } else { const back = document.createElement('div'); back.className = 'card-back'; if (card.back) { back.style.backgroundImage = `url("${cssUrl(card.back)}")`; back.style.backgroundSize = 'cover'; back.textContent = ''; } else back.textContent = 'LPTTS'; el.append(back); } return el; }
 
-function bindCardKeys(element, card, faceUp) {
+function bindCardKeys(element, card, faceUp, zone) {
   element.addEventListener('pointerenter', () => {
-    hoveredCard = { element, card, faceUp };
+    hoveredCard = { element, card, faceUp, zone };
     if (zoomHeld) showCardZoom();
   });
   element.addEventListener('pointerleave', () => {
@@ -314,6 +344,18 @@ function cardKeyDown(event) {
     hoveredCard = null; hideCardZoom();
     action('flip', { cardId });
   }
+  if (key === 's' && hoveredCard?.zone === 'table' && !event.repeat) {
+    event.preventDefault();
+    if (!hoveredCard.card.stack?.length) return toast('Put at least two cards in a stack first', true);
+    const cardId = hoveredCard.card.id;
+    hoveredCard = null; hideCardZoom();
+    action('shuffleStack', { cardId });
+  }
+  if (key === 'd' && hoveredCard?.zone === 'table' && !event.repeat) {
+    event.preventDefault();
+    if (!hoveredCard.card.stack?.length) return toast('Only a stack can be dealt', true);
+    openDealDialog(hoveredCard.card);
+  }
 }
 
 function cardKeyUp(event) {
@@ -332,6 +374,56 @@ function hideCardZoom() {
   zoomHeld = false;
   const overlay = $('#card-zoom');
   overlay.hidden = true; overlay.replaceChildren();
+}
+
+function applyCardSelection(element, cardId) {
+  const selected = (state.selections || []).find(([, selectedCard]) => selectedCard === cardId);
+  if (!selected) return;
+  const owner = state.players.find((player) => player.id === selected[0]);
+  if (!owner) return;
+  element.classList.add('selected-card'); element.dataset.selectedBy = owner.id;
+  element.style.setProperty('--selection-color', owner.color);
+}
+
+function markLocalSelection(element) {
+  document.querySelectorAll(`[data-selected-by="${CSS.escape(playerId)}"]`).forEach((card) => {
+    card.classList.remove('selected-card'); card.removeAttribute('data-selected-by'); card.style.removeProperty('--selection-color');
+  });
+  const me = state?.players.find((player) => player.id === playerId);
+  if (!me) return;
+  element.classList.add('selected-card'); element.dataset.selectedBy = playerId;
+  element.style.setProperty('--selection-color', me.color);
+}
+
+function clearSelection() {
+  clearLocalSelection();
+  action('select', { cardId: null });
+}
+
+function clearLocalSelection() {
+  document.querySelectorAll(`[data-selected-by="${CSS.escape(playerId)}"]`).forEach((card) => {
+    card.classList.remove('selected-card'); card.removeAttribute('data-selected-by'); card.style.removeProperty('--selection-color');
+  });
+}
+
+function clearSelectionFromTable(event) {
+  if (event.target.closest('.card,.deck-zone')) return;
+  clearSelection();
+}
+
+function openDealDialog(card) {
+  pendingDealCardId = card.id; hoveredCard = null; hideCardZoom();
+  const size = 1 + (card.stack?.length || 0), players = state.players.length;
+  const count = $('#deal-count'); count.max = Math.max(1, Math.floor(size / players)); count.value = Math.min(Number(count.value) || 1, Number(count.max));
+  $('#deal-summary').textContent = `${size} cards in this stack · ${players} player${players === 1 ? '' : 's'}`;
+  $('#deal-dialog').showModal(); count.focus(); count.select();
+}
+
+function submitDeal(event) {
+  event.preventDefault();
+  const cardId = pendingDealCardId; pendingDealCardId = '';
+  $('#deal-dialog').close();
+  action('dealStack', { cardId, countEach: Number($('#deal-count').value), destination: $('#deal-destination').value, faceUp: $('#deal-facing').value === 'up' });
 }
 
 function isTyping(target) { return target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target?.isContentEditable; }

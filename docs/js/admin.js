@@ -86,13 +86,16 @@ function renderObservation(data) {
     el.append(name, meta); return el;
   }));
   const state = data.state; $('#no-snapshot').hidden = Boolean(state);
-  $('#observe-cards').replaceChildren(...(state?.table || []).map(observeCard));
+  $('#observe-cards').replaceChildren(...(state?.table || []).map((card) => observeCard(card, state)));
   const deck = $('#observe-deck'); deck.hidden = !state?.deckCount; $('#observe-deck-count').textContent = state?.deckCount || '';
   deck.style.backgroundImage = state?.deckBack ? `url("${cssUrl(state.deckBack)}")` : '';
 }
 
-function observeCard(card) {
+function observeCard(card, state) {
   const el = document.createElement('div'); el.className = 'observe-card'; el.style.left = `${card.x}%`; el.style.top = `${card.y}%`; el.style.transform = `translate(-50%,-50%) rotate(${Number(card.rotation) || 0}deg)`;
+  const selected = (state.selections || []).find(([, selectedCard]) => selectedCard === card.id);
+  const player = selected && state.players.find(({ id }) => id === selected[0]);
+  if (player) el.style.outline = `4px solid ${player.color}`;
   if (card.faceUp !== false && card.face) {
     const face = document.createElement('div'); face.className = 'observe-card-face';
     const { index = 0, width = 1, height = 1 } = card.sheet || {};
@@ -100,6 +103,7 @@ function observeCard(card) {
   } else {
     const back = document.createElement('div'); back.className = 'observe-card-back'; if (card.back) back.style.backgroundImage = `url("${cssUrl(card.back)}")`; el.append(back);
   }
+  if (card.stack?.length) { const count = document.createElement('b'); count.className = 'observe-stack-count'; count.textContent = card.stack.length + 1; el.append(count); }
   return el;
 }
 
