@@ -4,9 +4,9 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#fffbeb">
-  <title>gametable.lol — Game night, anywhere</title>
-  <meta name="description" content="A free multiplayer game table for cards, dice, custom decks, and far-away friends.">
-  <link rel="stylesheet" href="./styles.css?v=21">
+  <title>gametable.lol — Prototype board games fast</title>
+  <meta name="description" content="Turn a board image and spreadsheet into a playable board-game prototype in under 10 minutes, then learn from every playtest.">
+  <link rel="stylesheet" href="./styles.css?v=22">
 </head>
 <body>
   <div id="lobby" class="lobby landing-page">
@@ -21,41 +21,55 @@
     <main class="landing-main">
       <section class="landing-hero">
         <div class="landing-copy">
-          <p class="landing-badge"><span>●</span> Free to play · No account needed</p>
-          <h1>Your game night.<br><em>Anywhere.</em></h1>
-          <p class="landing-lede">The fast, friendly virtual table for cards, dice, custom decks, and people who should really call each other more often.</p>
+          <p class="landing-badge"><span>●</span> Board-game prototyping, without the detour</p>
+          <h1>Idea to<br>playtest in<br><em>10 minutes.</em></h1>
+          <p class="landing-lede">Turn a board image and a spreadsheet of 120 cards into a playable prototype. Send a link. Watch people play. Learn what to fix next.</p>
           <form id="join-form" class="landing-form">
             <label for="name">What should we call you? <span>optional</span></label>
             <div class="landing-name-row"><input id="name" maxlength="24" placeholder="Card shark" autocomplete="nickname"><span aria-hidden="true">👋</span></div>
             <button class="landing-resume resume-button" type="button" id="resume-button" hidden>↩ Resume your saved table</button>
           </form>
           <p id="lobby-status" class="status landing-status" role="status"></p>
-          <div class="landing-proof" aria-label="Product benefits"><span>✓ Private hands</span><span>✓ TTS imports</span><span>✓ No install</span></div>
+          <div class="landing-proof" aria-label="Product benefits"><span>✓ No account</span><span>✓ No download</span><span>✓ Built for iteration</span></div>
         </div>
 
-        <div class="landing-demo" aria-label="Preview of an online game table">
-          <div class="demo-window-bar"><i></i><i></i><i></i><strong>Friday night table</strong><span>2 online</span></div>
-          <div class="demo-table">
-            <div class="demo-player demo-player-one"><b>J</b><span>Your turn</span></div>
-            <div class="demo-player demo-player-two"><b>M</b><span>Thinking…</span></div>
-            <div class="demo-deck"><i></i><i></i><i></i><strong>42</strong></div>
-            <div class="demo-card demo-card-one"><small>A</small><b>♠</b></div>
-            <div class="demo-card demo-card-two"><small>Q</small><b>♥</b></div>
-            <div class="demo-die" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
-            <div class="demo-cursor"><span></span> Alex</div>
-            <p>good move 👀</p>
+        <div class="landing-demo prototype-demo" aria-label="Prototype builder preview">
+          <div class="demo-window-bar"><i></i><i></i><i></i><strong>prototype-v17</strong><span>ready to play</span></div>
+          <div class="prototype-canvas">
+            <div class="prototype-board"><span>DRAGON<br>VALLEY</span><i></i><i></i><i></i></div>
+            <div class="prototype-card prototype-card-one"><small>01</small><b>DRAGON</b><span>+5 gold</span></div>
+            <div class="prototype-card prototype-card-two"><small>02</small><b>MARKET</b><span>Draw 2</span></div>
+            <div class="prototype-card prototype-card-three"><small>03</small><b>RUINS</b><span>Roll a die</span></div>
+            <div class="prototype-import"><strong>✓ 120 cards imported</strong><span>board.png + cards.csv</span></div>
+            <div class="prototype-link"><span>↗</span><strong>play.gametable.lol/x7J4K</strong><small>Click to playtest</small></div>
           </div>
         </div>
       </section>
 
-      <section class="landing-features" aria-label="Features">
-        <article><span>01</span><h2>Bring any deck</h2><p>Import TTS JSON, upload card art, or drop in a classic 52-card deck.</p></article>
-        <article><span>02</span><h2>Play your way</h2><p>Stack, shuffle, deal, flip, fan, roll, and make the table feel like yours.</p></article>
-        <article><span>03</span><h2>Just send a link</h2><p>Host solo or invite friends with one tiny table code. No signup ceremony.</p></article>
+      <section class="landing-metric-strip" aria-label="Prototype speed metric"><div><strong>10 min</strong><span>board image + spreadsheet<br>to playable prototype</span></div><div><strong>1 link</strong><span>for every playtest<br>no install required</span></div><div><strong>∞ loops</strong><span>prototype → playtest<br>→ learn → repeat</span></div></section>
+
+      <section class="landing-features" aria-label="Core features">
+        <article><span>01 / PROTOTYPE</span><h2>Ridiculously fast.</h2><p>Bring a board image and a spreadsheet of cards. Get a table your testers can actually play in under ten minutes.</p><a href="#analytics">See the loop ↓</a></article>
+        <article><span>02 / PLAYTEST</span><h2>Send a link. Play.</h2><p><code>play.gametable.lol/x7J4K</code><br>Choose a name, sit down, and start. No Steam, purchase, download, or account.</p><a href="#analytics">Invite testers ↓</a></article>
+        <article><span>03 / LEARN</span><h2>Every game teaches you.</h2><p>Sessions, win rates, scores, feedback, and the moments your players keep talking about—all in one place.</p><a href="#analytics">View playtest data ↓</a></article>
+      </section>
+
+      <section id="analytics" class="landing-analytics">
+        <div class="section-intro"><p class="landing-kicker">The part that compounds</p><h2>Turn every playtest<br>into <em>useful data.</em></h2><p>Stop collecting vague notes after game night. See what changed between versions, what players chose, and what to fix next.</p></div>
+        <div class="analytics-window" aria-label="Playtest analytics preview">
+          <div class="analytics-top"><strong>Prototype v17</strong><span>4 sessions · 15 players · 3h 42m played</span><b>↑ v16</b></div>
+          <div class="analytics-grid"><div><small>AVERAGE DURATION</small><strong>56 min</strong><span class="down">↓ 14 min vs v16</span></div><div><small>FIRST-PLAYER WIN RATE</small><strong>52%</strong><span>nearly balanced</span></div><div><small>AVERAGE FINAL SCORE</small><strong>74—69</strong><span>close games</span></div><div class="warning"><small>DRAGON SELECTED</small><strong>82%</strong><span>Dragon player win rate <b>71% ⚠️</b></span></div></div>
+          <div class="feedback"><strong>Common feedback</strong><span><b>5</b> Endgame feels abrupt</span><span><b>4</b> Dragon appears overpowered</span><span><b>3</b> Setup takes too long</span><div class="enjoyment"><small>PLAYER ENJOYMENT</small><strong>8.1/10</strong><b>↑ 0.7</b></div><div class="clarity"><small>RULES CLARITY</small><strong>6.4/10</strong><b>↓ 0.3</b></div></div>
+        </div>
+      </section>
+
+      <section class="landing-ai">
+        <div class="ai-copy"><p class="landing-kicker">Your tireless co-designer</p><h2>Balance with<br><em>AI players.</em></h2><p>Play against AI, watch agents play each other, or run hundreds of simulations overnight. Let AI surface broken strategies and suggest what to tune.</p><button class="ai-pill" type="button" disabled>AI lab · coming soon</button></div>
+        <div class="ai-console" aria-label="AI simulation preview"><div class="ai-console-head"><span>AI LAB</span><strong>Balance sweep / v17</strong><b>RUNNING</b></div><div class="simulation-row"><span>100 simulations</span><div><i style="width:71%"></i></div><b>71%</b></div><div class="simulation-row"><span>Dragon win rate</span><div><i style="width:71%"></i></div><b class="hot">71%</b></div><div class="simulation-row"><span>Market win rate</span><div><i style="width:48%"></i></div><b>48%</b></div><div class="ai-suggestion"><span>✦</span><p><strong>Suggestion</strong> Reduce Dragon’s gold bonus from <b>+5</b> to <b>+3</b> to bring its win rate near 50%.</p></div></div>
       </section>
     </main>
 
-    <footer class="landing-footer"><strong>gametable.lol</strong><span>Built for game night, not screen night.</span></footer>
+    <footer class="landing-footer"><strong>gametable.lol</strong><span>Prototype in minutes. Learn for years.</span></footer>
   </div>
 
   <div id="game" class="game" hidden>

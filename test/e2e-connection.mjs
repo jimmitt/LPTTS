@@ -63,12 +63,12 @@ async function runConnectionTest() {
       await page.goto(server.url);
     }
 
-    if (await host.title() !== 'gametable.lol — Game night, anywhere') throw new Error('The gametable.lol landing title is missing.');
+    if (await host.title() !== 'gametable.lol — Prototype board games fast') throw new Error('The gametable.lol landing title is missing.');
     const landingMetrics = await host.evaluate(() => {
       const nav = document.querySelector('.landing-nav').getBoundingClientRect(), hostButton = document.querySelector('#host-button').getBoundingClientRect(), joinButton = document.querySelector('#join-button').getBoundingClientRect();
       return { heading: document.querySelector('.landing-hero h1')?.textContent, navTop: nav.top, hostTop: hostButton.top, joinTop: joinButton.top, horizontalOverflow: document.documentElement.scrollWidth - innerWidth };
     });
-    if (!landingMetrics.heading?.includes('Your game night') || landingMetrics.navTop > 5 || landingMetrics.hostTop > 100 || landingMetrics.joinTop > 100 || landingMetrics.horizontalOverflow > 1) throw new Error(`Desktop landing layout is invalid: ${JSON.stringify(landingMetrics)}`);
+    if (!landingMetrics.heading?.includes('Idea to') || landingMetrics.navTop > 5 || landingMetrics.hostTop > 100 || landingMetrics.joinTop > 100 || landingMetrics.horizontalOverflow > 1) throw new Error(`Desktop landing layout is invalid: ${JSON.stringify(landingMetrics)}`);
     const mobileContext = await browser.newContext({ viewport: { width: 375, height: 812 } }), mobile = await mobileContext.newPage();
     await mobile.goto(server.url);
     const mobileMetrics = await mobile.evaluate(() => ({ hostTop: document.querySelector('#host-button').getBoundingClientRect().top, joinTop: document.querySelector('#join-button').getBoundingClientRect().top, horizontalOverflow: document.documentElement.scrollWidth - innerWidth, logo: document.querySelector('.landing-logo')?.textContent.trim() }));
