@@ -11,7 +11,14 @@ export function parseTtsDeck(input) {
       const cardId = Number(state.CardID || 0), deckId = Math.floor(cardId / 100), index = cardId % 100;
       const custom = decks[deckId] || {};
       if (/^file:/i.test(custom.FaceURL || '') || /^file:/i.test(custom.BackURL || '')) hasLocalArtwork = true;
-      cards.push({ id: newId(), name: String(state.Nickname || `Card ${index + 1}`).slice(0,120), description: String(state.Description || '').slice(0,500), face:safe(custom.FaceURL), back:safe(custom.BackURL), sheet:{index,width:Number(custom.NumWidth)||1,height:Number(custom.NumHeight)||1,uniqueBack:Boolean(custom.UniqueBack)} });
+      let metadata;
+      if (typeof state.GMNotes === 'string' && state.GMNotes.trim()) {
+        try {
+          const notes = JSON.parse(state.GMNotes);
+          metadata = notes?.legendaryProfiles || notes?.metadata || notes;
+        } catch { /* GMNotes may contain ordinary text; leave metadata absent. */ }
+      } else if (state.metadata && typeof state.metadata === 'object') metadata = state.metadata;
+      cards.push({ id: newId(), cardId, name: String(state.Nickname || `Card ${index + 1}`).slice(0,120), description: String(state.Description || '').slice(0,500), face:safe(custom.FaceURL), back:safe(custom.BackURL), sheet:{index,width:Number(custom.NumWidth)||1,height:Number(custom.NumHeight)||1,uniqueBack:Boolean(custom.UniqueBack)}, ...(metadata ? { metadata } : {}) });
       return;
     }
     for (const child of state.ContainedObjects || []) walk(child, decks);
