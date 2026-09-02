@@ -4,6 +4,7 @@ import { createImageDeck } from './image-deck.js?v=2';
 import { createStandardDeck } from './standard-deck.js?v=1';
 import { RelaySession } from './relay.js?v=2';
 import { importDeckZip } from './zip-deck.js';
+import { createHundredMilesGame, createWarGame, startHundredMiles, startWar } from './rules.js';
 
 const $ = (selector) => document.querySelector(selector);
 const ui = {
@@ -14,6 +15,7 @@ const ui = {
   toast: $('#toast'), dialog: $('#connect-dialog'), hostPanel: $('#connect-host'), guestPanel: $('#connect-guest')
 };
 let role = '', playerId = '', state, room, relay;
+let rulesGame = null;
 let savedRelay;
 let hoveredCard = null, hoveredObject = null, zoomHeld = false;
 let pendingDealCardId = '';
@@ -42,6 +44,9 @@ $('#import-button').addEventListener('click', () => ui.file.click());
 $('#zip-import-button').addEventListener('click', () => $('#zip-file').click());
 $('#zip-file').addEventListener('change', importZipDeck);
 $('#standard-deck-button').addEventListener('click', addStandardDeck);
+$('#rules-button').addEventListener('click', openRulesDialog);
+$('#rules-game').addEventListener('change', updateRulesOptions);
+$('#rules-form').addEventListener('submit', startRulesGame);
 $('#end-turn').addEventListener('click', () => action('nextTurn'));
 $('#image-deck-button').addEventListener('click', () => $('#image-deck-dialog').showModal());
 $('#image-deck-form').addEventListener('submit', createUploadedDeck);
@@ -287,6 +292,7 @@ function render() {
   const shareLabel = role === 'host' ? `Share table ${state.code}` : `Table code ${state.code}`;
   ui.connections.title = shareLabel; ui.connections.setAttribute('aria-label', shareLabel);
   ui.playerCount.textContent = state.players.length;
+  const rulesButton = $('#rules-button'); if (rulesButton) rulesButton.textContent = rulesGame ? `⚙ ${rulesGame.game === 'war' ? 'War' : '100 Miles'} active` : '⚙ Game rules';
   ui.players.replaceChildren(...state.players.map((player) => {
     const row = document.createElement('div'); row.className = `player-row${player.id === state.currentTurn ? ' current-turn' : ''}`;
     const backs = Array.from({ length: Math.min(player.handCount, 5) }, () => '<i></i>').join('');
@@ -308,6 +314,23 @@ function render() {
   trash.title = selectedIds.length > 1 ? `Delete ${selectedIds.length} selected items` : selected.objectId ? (selected.scope === 'stack' ? 'Delete selected stack' : 'Delete selected object') : `Open trash (${state.trash?.length || 0})`;
   trash.setAttribute('aria-label', trash.title);
   if ($('#trash-dialog').open) renderTrashDialog();
+}
+
+function openRulesDialog() {
+  if (role !== 'host') return toast('Only the host can start the rules engine', true);
+  const select = $('#rules-first-player'); select.replaceChildren(...(state?.players || []).map((p) => new Option(p.name, p.id)));
+  if (playerId) select.value = playerId; updateRulesOptions(); $('#rules-dialog').showModal();
+}
+function updateRulesOptions() { $('#rules-stakes-label').hidden = $('#rules-game').value !== 'war'; }
+function startRulesGame(event) {
+  event.preventDefault();
+  try {
+    const players = (state?.players || []).map((p) => ({ id: p.id, name: p.name })), first = $('#rules-first-player').value, kind = $('#rules-game').value;
+    if (kind === 'war') rulesGame = startWar(createWarGame(players, {}, $('#rules-high-stakes').checked), playerId, first, 'sun');
+    else rulesGame = startHundredMiles(createHundredMilesGame(players), playerId, first);
+    $('#rules-status').textContent = `${kind === 'war' ? 'War' : '100 Miles'} started. First player: ${state.players.find((p) => p.id === first)?.name || first}.`;
+    $('#rules-dialog').close(); render(); toast('Rules engine started');
+  } catch (error) { $('#rules-status').textContent = error.message; }
 }
 
 function handCard(card) {
