@@ -1,5 +1,5 @@
 // Browser-side TTS parser; imports never leave the host's device.
-export function parseTtsDeck(input) {
+export function parseTtsDeck(input, options = {}) {
   const save = typeof input === 'string' ? JSON.parse(input) : input;
   const cards = [];
   let hasLocalArtwork = false;
@@ -26,7 +26,7 @@ export function parseTtsDeck(input) {
   if (Array.isArray(save?.ObjectStates)) for (const state of save.ObjectStates) walk(state);
   else if (save?.Name) walk(save);
   if (!cards.length) throw new Error('No cards found in that TTS file.');
-  if (hasLocalArtwork) throw new Error('This TTS object uses local file paths. Use “Create image deck” and select its front and back images.');
+  if (hasLocalArtwork && !options.allowLocalArtwork) throw new Error('This TTS object uses local file paths. Use “Create image deck” and select its front and back images.');
   return cards;
 }
 

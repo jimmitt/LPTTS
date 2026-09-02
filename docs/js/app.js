@@ -3,6 +3,7 @@ import { parseTtsDeck } from './tts.js';
 import { createImageDeck } from './image-deck.js?v=2';
 import { createStandardDeck } from './standard-deck.js?v=1';
 import { RelaySession } from './relay.js?v=2';
+import { importDeckZip } from './zip-deck.js';
 
 const $ = (selector) => document.querySelector(selector);
 const ui = {
@@ -38,6 +39,8 @@ $('#copy-room-link').addEventListener('click', () => copy($('#room-link').value,
 document.querySelectorAll('[data-close]').forEach((button) => button.addEventListener('click', () => $(`#${button.dataset.close}`).close()));
 $('#help').addEventListener('click', () => $('#help-dialog').showModal());
 $('#import-button').addEventListener('click', () => role === 'host' ? ui.file.click() : toast('Only the host can import a deck', true));
+$('#zip-import-button').addEventListener('click', () => role === 'host' ? $('#zip-file').click() : toast('Only the host can import a deck', true));
+$('#zip-file').addEventListener('change', importZipDeck);
 $('#standard-deck-button').addEventListener('click', addStandardDeck);
 $('#end-turn').addEventListener('click', () => action('nextTurn'));
 $('#image-deck-button').addEventListener('click', () => role === 'host' ? $('#image-deck-dialog').showModal() : toast('Only the host can create a deck', true));
@@ -207,6 +210,24 @@ async function importDeck() {
   catch (error) { toast(error.message, true); }
   finally { ui.file.value = ''; }
 }
+
+async function importZipDeck() {
+  const input = $('#zip-file'), zip = input.files[0];
+  try {
+    if (!zip) return;
+    toast('Reading deck package…');
+    const cards = await importDeckZip(zip);
+    const uploaded = new Map();
+    for (const card of cards) {
+      for (const key of ['face', 'back']) if (!uploaded.has(card[key])) uploaded.set(card[key], await relay.upload(dataUrlBlob(card[key]), key === 'face' ? 'card faces' : 'card back').then((result) => result.url));
+      card.face = uploaded.get(card.face); card.back = uploaded.get(card.back);
+    }
+    room.importDeck(cards, playerId); updateHost(); toast(`Placed a ${cards.length}-card stack`);
+  } catch (error) { toast(error.message, true); }
+  finally { input.value = ''; }
+}
+
+function dataUrlBlob(value) { const [header, body] = value.split(','); const bytes = Uint8Array.from(atob(body), (char) => char.charCodeAt(0)); return new File([bytes], 'deck-image', { type: header.match(/data:([^;]+)/)?.[1] || 'application/octet-stream' }); }
 
 async function createUploadedDeck(event) {
   event.preventDefault();

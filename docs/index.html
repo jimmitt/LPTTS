@@ -86,6 +86,7 @@
         <div class="deck-tools">
           <input id="tts-file" type="file" accept=".json,application/json" hidden>
           <button id="import-button">＋ Import TTS JSON</button>
+          <button id="zip-import-button">▣ Import deck ZIP</button>
           <button id="image-deck-button">▧ Create image deck</button>
           <button id="standard-deck-button">♠ Add standard deck</button>
           <p>Every deck is placed on the table as a normal stack.</p>
@@ -147,6 +148,7 @@
       }
     }, 2500);
   </script>
-  <script type="module" src="./js/app.js?v=26" onerror="document.getElementById('lobby-status').textContent='The app script failed to load. Please reload the page.'"></script>
+  <input id="zip-file" type="file" accept=".zip,application/zip" hidden>
+  <script type="module" src="./js/app.js?v=27" onerror="document.getElementById('lobby-status').textContent='The app script failed to load. Please reload the page.'"></script>
 </body>
 </html>
