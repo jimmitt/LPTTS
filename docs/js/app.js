@@ -38,12 +38,12 @@ $('#copy-room-code').addEventListener('click', () => copy($('#room-code').value,
 $('#copy-room-link').addEventListener('click', () => copy($('#room-link').value, 'Invite link copied'));
 document.querySelectorAll('[data-close]').forEach((button) => button.addEventListener('click', () => $(`#${button.dataset.close}`).close()));
 $('#help').addEventListener('click', () => $('#help-dialog').showModal());
-$('#import-button').addEventListener('click', () => role === 'host' ? ui.file.click() : toast('Only the host can import a deck', true));
-$('#zip-import-button').addEventListener('click', () => role === 'host' ? $('#zip-file').click() : toast('Only the host can import a deck', true));
+$('#import-button').addEventListener('click', () => ui.file.click());
+$('#zip-import-button').addEventListener('click', () => $('#zip-file').click());
 $('#zip-file').addEventListener('change', importZipDeck);
 $('#standard-deck-button').addEventListener('click', addStandardDeck);
 $('#end-turn').addEventListener('click', () => action('nextTurn'));
-$('#image-deck-button').addEventListener('click', () => role === 'host' ? $('#image-deck-dialog').showModal() : toast('Only the host can create a deck', true));
+$('#image-deck-button').addEventListener('click', () => $('#image-deck-dialog').showModal());
 $('#image-deck-form').addEventListener('submit', createUploadedDeck);
 $('#face-file').addEventListener('change', updateImageSummary);
 $('#back-file').addEventListener('change', updateImageSummary);
@@ -153,7 +153,8 @@ function action(type, body = {}) {
 
 function applyHostAction(actor, type, body) {
   try {
-    if (type === 'draw') room.draw(actor);
+    if (type === 'importDeck') room.importDeck(body.cards, actor);
+    else if (type === 'draw') room.draw(actor);
     else if (type === 'shuffle') room.shuffle(actor);
     else if (type === 'play') room.play(actor, body.cardId, body.x, body.y, body.targetId || null);
     else if (type === 'take') room.take(actor, body.cardId);
@@ -206,7 +207,7 @@ function updateHost() {
 }
 
 async function importDeck() {
-  try { const cards = parseTtsDeck(await ui.file.files[0].text()); room.importDeck(cards, playerId); updateHost(); toast(`Placed a ${cards.length}-card stack`); }
+  try { const cards = parseTtsDeck(await ui.file.files[0].text()); submitImportedDeck(cards); }
   catch (error) { toast(error.message, true); }
   finally { ui.file.value = ''; }
 }
@@ -222,7 +223,7 @@ async function importZipDeck() {
       for (const key of ['face', 'back']) if (!uploaded.has(card[key])) uploaded.set(card[key], await relay.upload(dataUrlBlob(card[key]), key === 'face' ? 'card faces' : 'card back').then((result) => result.url));
       card.face = uploaded.get(card.face); card.back = uploaded.get(card.back);
     }
-    room.importDeck(cards, playerId); updateHost(); toast(`Placed a ${cards.length}-card stack`);
+    submitImportedDeck(cards);
   } catch (error) { toast(error.message, true); }
   finally { input.value = ''; }
 }
@@ -243,13 +244,19 @@ async function createUploadedDeck(event) {
     const face = await upload(faceFile, 'card faces');
     const back = await upload(backFile, 'card back');
     const cards = createImageDeck({ name: $('#deck-name').value, face, back, columns: $('#deck-columns').value, rows: $('#deck-rows').value, count: $('#deck-card-count').value });
-    room.importDeck(cards, playerId); updateHost(); $('#image-deck-dialog').close(); status.textContent = ''; toast(`Placed a ${cards.length}-card stack`);
+    submitImportedDeck(cards); $('#image-deck-dialog').close(); status.textContent = '';
   } catch (error) { status.textContent = error.message; }
 }
 
 function addStandardDeck() {
-  if (role !== 'host') return toast('Only the host can add a deck', true);
-  room.importDeck(createStandardDeck(), playerId); updateHost(); toast('Placed a standard 52-card deck');
+  submitImportedDeck(createStandardDeck());
+}
+
+function submitImportedDeck(cards) {
+  if (!Array.isArray(cards) || !cards.length) throw new Error('The deck contains no cards.');
+  if (role === 'host') { room.importDeck(cards, playerId); updateHost(); }
+  else action('importDeck', { cards });
+  toast(`Placed a ${cards.length}-card stack`);
 }
 
 async function updateImageSummary() {
