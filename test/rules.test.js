@@ -16,3 +16,8 @@ test('War sends tied cards to both lose piles', () => {
   state = warAction(state, { type: 'play', playerId: 'a', glyph: 'sun' });
   assert.equal(state.players[0].lose.length, 1); assert.equal(state.players[1].lose.length, 1);
 });
+test('War progresses to a scored finish', () => {
+  let state = createWarGame([{ id: 'a' }, { id: 'b' }], { a: [card({ sun: 9 })], b: [card({ sun: 2 })] });
+  state = startWar(state, 'a', 'a', 'sun'); state = warAction(state, { playerId: 'a', glyph: 'sun' });
+  assert.equal(state.finished, true); assert.equal(state.winnerId, 'a'); assert.equal(state.players[0].win.length, 1);
+});

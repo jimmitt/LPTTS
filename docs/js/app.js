@@ -4,7 +4,7 @@ import { createImageDeck } from './image-deck.js?v=2';
 import { createStandardDeck } from './standard-deck.js?v=1';
 import { RelaySession } from './relay.js?v=2';
 import { importDeckZip } from './zip-deck.js';
-import { createHundredMilesGame, createWarGame, startHundredMiles, startWar } from './rules.js';
+import { createHundredMilesGame, createWarGame, startHundredMiles, startWar, hundredMilesAction, warAction, GLYPHS } from './rules.js';
 
 const $ = (selector) => document.querySelector(selector);
 const ui = {
@@ -48,6 +48,7 @@ $('#rules-button').addEventListener('click', openRulesDialog);
 $('#rules-game').addEventListener('change', updateRulesOptions);
 $('#rules-form').addEventListener('submit', startRulesGame);
 $('#add-ai-player').addEventListener('click', addAIPlayer);
+$('#rules-prompt').addEventListener('submit', submitRulesTurn);
 $('#end-turn').addEventListener('click', () => action('nextTurn'));
 $('#image-deck-button').addEventListener('click', () => $('#image-deck-dialog').showModal());
 $('#image-deck-form').addEventListener('submit', createUploadedDeck);
@@ -182,7 +183,8 @@ function applyHostAction(actor, type, body) {
     else if (type === 'moveSelection') room.moveSelection(actor, body.anchorId, body.x, body.y, body.rollDice, body.objectIds || []);
     else if (type === 'rollDie') room.rollDie(actor, body.objectId);
     else if (type === 'rollDice') room.rollDice(actor, body.objectIds);
-    else if (type === 'nextTurn') room.nextTurn(actor);
+    else if (type === 'rulesTurn') { room.rules = room.rules.game === 'war' ? warAction(room.rules, { ...body, playerId: actor }) : hundredMilesAction(room.rules, { ...body, playerId: actor }); room.currentTurn = room.rules.currentPlayerId || room.currentTurn; }
+    else if (type === 'nextTurn') { if (room.rules?.started && !room.rules.winnerId) throw new Error('Use the rules prompt to complete your turn.'); room.nextTurn(actor); }
     else if (type === 'destroy') room.destroy(actor, body.objectId, body.scope || 'top');
     else if (type === 'destroyMany') room.destroyMany(actor, body.objectIds);
     else if (type === 'restoreTrash') room.restoreTrash(actor, body.trashId);
@@ -210,6 +212,7 @@ function updateHost() {
       { type: 'state', target: id, data: { state: room.viewFor(id) } }
     ]).catch(networkError);
   }
+  scheduleAI();
 }
 
 async function importDeck() {
@@ -287,6 +290,7 @@ async function updateImageSummary() {
 
 function render() {
   if (!state) return;
+  rulesGame = state.rules || null;
   const authoritativeGroup = (state.selectionGroups || []).find(([id]) => id === playerId)?.[1];
   const authoritativeSingle = (state.selections || []).find(([id]) => id === playerId)?.[1];
   localSelectionIds = authoritativeGroup?.length ? [...authoritativeGroup] : (authoritativeSingle ? [authoritativeSingle] : []);
@@ -295,7 +299,7 @@ function render() {
   ui.playerCount.textContent = state.players.length;
   const rulesButton = $('#rules-button'); if (rulesButton) rulesButton.textContent = rulesGame ? `⚙ ${rulesGame.game === 'war' ? 'War' : '100 Miles'} active` : '⚙ Game rules';
   const prompt = $('#rules-prompt');
-  if (rulesGame) { const active = rulesGame.players.find((p) => p.id === rulesGame.currentPlayerId); prompt.hidden = false; prompt.textContent = rulesGame.winnerId ? `${rulesGame.players.find((p) => p.id === rulesGame.winnerId)?.name || 'Player'} wins!` : `${active?.name || 'Player'}: ${rulesGame.game === 'war' ? `choose a glyph and play the next book` : `choose a glyph and even or odd, then reveal your top card`}.`; }
+  if (rulesGame) { const active = rulesGame.players.find((p) => p.id === rulesGame.currentPlayerId), mine = active?.id === playerId, targets = rulesGame.players.filter((p) => p.id !== playerId); prompt.hidden = false; prompt.innerHTML = rulesGame.winnerId ? `<strong>${escapeHtml(rulesGame.players.find((p) => p.id === rulesGame.winnerId)?.name || 'Player')} wins!</strong>` : rulesGame.finished ? '<strong>The game ended in a tie.</strong>' : `<strong>${escapeHtml(active?.name || 'Player')}'s turn</strong><form>${rulesGame.game === 'hundred-miles' ? '<select name="parity"><option>even</option><option>odd</option></select><select name="effect"><option value="advance">Move forward</option><option value="attack">Subtract from player</option></select>' : ''}<select name="glyph">${GLYPHS.map((g) => `<option>${g}</option>`).join('')}</select>${rulesGame.game === 'hundred-miles' ? `<select name="targetId">${targets.map((p) => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join('')}</select>` : ''}<button type="submit" ${mine ? '' : 'disabled'}>${rulesGame.game === 'war' ? 'Play book' : 'Reveal card'}</button></form>${rulesSummary(rulesGame)}`; }
   else prompt.hidden = true;
   ui.players.replaceChildren(...state.players.map((player) => {
     const row = document.createElement('div'); row.className = `player-row${player.id === state.currentTurn ? ' current-turn' : ''}`;
@@ -329,13 +333,33 @@ function updateRulesOptions() { $('#rules-stakes-label').hidden = $('#rules-game
 function startRulesGame(event) {
   event.preventDefault();
   try {
-    const players = (state?.players || []).map((p) => ({ id: p.id, name: p.name })), first = $('#rules-first-player').value, kind = $('#rules-game').value;
-    if (kind === 'war') rulesGame = startWar(createWarGame(players, {}, $('#rules-high-stakes').checked), playerId, first, 'sun');
-    else rulesGame = startHundredMiles(createHundredMilesGame(players), playerId, first);
+    const players = [...room.players.values()].map((p) => ({ id: p.id, name: p.name, ai: Boolean(p.ai) })), first = $('#rules-first-player').value, kind = $('#rules-game').value;
+    if (!room.table.length) throw new Error('Put a Legendary Profiles card stack on the table first.');
+    const pileIndex = room.table.findIndex((p) => p.metadata?.glyphs || p.stack?.some((c) => c.metadata?.glyphs));
+    if (pileIndex < 0) throw new Error('No stack with Legendary Profiles glyph metadata was found.');
+    const pile = room.table.splice(pileIndex, 1)[0], cards = [pile, ...(pile.stack || [])].map(({ stack, x, y, rotation, ...card }) => card);
+    for (let i = cards.length - 1; i; i--) { const j = Math.floor(Math.random() * (i + 1)); [cards[i], cards[j]] = [cards[j], cards[i]]; }
+    const decks = Object.fromEntries(players.map((p) => [p.id, []])); cards.forEach((card, i) => decks[players[i % players.length].id].push(card));
+    if (kind === 'war') { const values = players.map((p) => Number(decks[p.id][0]?.metadata?.glyphs?.sun || 0)); const warFirst = values[0] === values[1] ? first : players[values[0] > values[1] ? 0 : 1].id; rulesGame = startWar(createWarGame(players, decks, $('#rules-high-stakes').checked), playerId, warFirst, 'sun'); }
+    else rulesGame = startHundredMiles(createHundredMilesGame(players, decks), playerId, first);
+    room.rules = rulesGame; room.currentTurn = rulesGame.currentPlayerId;
     $('#rules-status').textContent = `${kind === 'war' ? 'War' : '100 Miles'} started. First player: ${state.players.find((p) => p.id === first)?.name || first}.`;
-    $('#rules-dialog').close(); render(); toast('Rules engine started');
+    $('#rules-dialog').close(); updateHost(); toast('Rules engine started');
   } catch (error) { $('#rules-status').textContent = error.message; }
 }
+
+function submitRulesTurn(event) { event.preventDefault(); const data = Object.fromEntries(new FormData(event.target)); if (data.match) [data.glyph, data.value] = data.match.split(':'); action('rulesTurn', { type: data.type || (rulesGame?.game === 'war' ? 'play' : 'draw'), ...data }); }
+function rulesSummary(game) {
+  const scores = `<div>${game.players.map((p) => game.game === 'war' ? `${escapeHtml(p.name)}: ${p.draw.length} draw · ${p.win.length} won` : `${escapeHtml(p.name)}: ${p.miles} miles · ${p.draw.length} cards`).join('<br>')}</div>`;
+  if (game.game !== 'hundred-miles' || game.currentPlayerId !== playerId) return scores;
+  const player = game.players.find((p) => p.id === playerId), counts = new Map();
+  for (const card of player.discard) for (const glyph of GLYPHS) { const value = Number(card.metadata?.glyphs?.[glyph]); const key = `${glyph}:${value}`; counts.set(key, (counts.get(key) || 0) + 1); }
+  const matches = [...counts].filter(([, count]) => count >= 3).map(([key]) => key); if (!matches.length) return scores;
+  const targets = game.players.filter((p) => p.id !== playerId);
+  return `${scores}<form><input type="hidden" name="type" value="triple"><select name="match">${matches.map((m) => `<option>${m}</option>`).join('')}</select><select name="targetId">${targets.map((p) => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join('')}</select><button>Use matching three</button></form>`;
+}
+let aiTimer = null;
+function scheduleAI() { clearTimeout(aiTimer); const active = room?.rules?.players?.find((p) => p.id === room.rules.currentPlayerId); if (!active?.ai || room.rules.winnerId || room.rules.finished) return; aiTimer = setTimeout(() => { const glyph = GLYPHS[Math.floor(Math.random() * GLYPHS.length)], others = room.rules.players.filter((p) => p.id !== active.id); applyHostAction(active.id, 'rulesTurn', room.rules.game === 'war' ? { type: 'play', glyph } : { type: 'draw', glyph, parity: Math.random() < .5 ? 'even' : 'odd', effect: Math.random() < .7 ? 'advance' : 'attack', targetId: others[Math.floor(Math.random() * others.length)]?.id }); }, 700); }
 
 function addAIPlayer() {
   if (role !== 'host') return toast('Only the host can add an AI player', true);

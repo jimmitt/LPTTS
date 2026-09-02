@@ -14,6 +14,7 @@ export class GameRoom {
     this.currentTurn = '';
     this.trash = [];
     this.rollAnimation = null;
+    this.rules = null;
   }
 
   static restore(data) {
@@ -33,11 +34,12 @@ export class GameRoom {
     room.currentTurn = room.players.has(data.currentTurn) ? data.currentTurn : (room.players.keys().next().value || '');
     room.trash = Array.isArray(data.trash) ? data.trash : [];
     room.rollAnimation = data.rollAnimation && typeof data.rollAnimation.id === 'string' ? data.rollAnimation : null;
+    room.rules = data.rules || null;
     return room;
   }
 
   serialize() {
-    return { code: this.code, players: [...this.players.values()], table: this.table, deck: this.deck, selections: [...this.selections], selectionScopes: [...this.selectionScopes], selectionGroups: [...this.selectionGroups], objects: this.objects, background: this.background, currentTurn: this.currentTurn, trash: this.trash, rollAnimation: this.rollAnimation };
+    return { code: this.code, players: [...this.players.values()], table: this.table, deck: this.deck, selections: [...this.selections], selectionScopes: [...this.selectionScopes], selectionGroups: [...this.selectionGroups], objects: this.objects, background: this.background, currentTurn: this.currentTurn, trash: this.trash, rollAnimation: this.rollAnimation, rules: this.rules };
   }
 
   join(id, name) {
@@ -529,6 +531,7 @@ export class GameRoom {
       background: this.background,
       currentTurn: this.currentTurn,
       rollAnimation: this.rollAnimation,
+      rules: this.rules,
       trash: this.trash.map(({ item, ...entry }) => entry.zone === 'hand' && entry.owner !== viewerId
         ? { ...entry, label: 'Private card', private: true }
         : { ...entry, item }),

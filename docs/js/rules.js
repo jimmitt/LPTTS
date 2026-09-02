@@ -30,6 +30,7 @@ export function hundredMilesAction(state, action) {
   if (action.type === 'draw') {
     const glyph = String(action.glyph); if (!GLYPHS.includes(glyph)) throw new Error('Choose a valid glyph.');
     if (!['even', 'odd'].includes(action.parity)) throw new Error('Choose even or odd.');
+    if (!player.draw.length && player.discard.length) { player.draw = player.discard.splice(0); for (let i = player.draw.length - 1; i; i--) { const j = Math.floor(Math.random() * (i + 1)); [player.draw[i], player.draw[j]] = [player.draw[j], player.draw[i]]; } }
     const card = player.draw.shift(); if (!card) throw new Error('Your draw pile is empty.');
     const value = glyphValue(card, glyph), matches = value % 2 === (action.parity === 'even' ? 0 : 1);
     const repeated = player.lastGlyph === glyph && player.lastValue === value;
@@ -42,6 +43,7 @@ export function hundredMilesAction(state, action) {
         target.miles = Math.max(0, target.miles - value);
       } else player.miles += value;
     } else player.miles = Math.max(0, player.miles - value);
+    next.lastEvent = { playerId: player.id, card, glyph, value, parity: action.parity, matches, effect: matches ? (action.effect || 'advance') : 'backward', targetId: action.targetId || null, repeated };
     if (player.miles >= 100) next.winnerId = player.id;
   } else if (action.type === 'triple') {
     const matches = player.discard.filter((card) => glyphValue(card, action.glyph) === Number(action.value));
@@ -71,17 +73,18 @@ export function startWar(state, hostId, firstPlayerId, firstGlyph) {
 }
 
 export function warAction(state, action) {
-  if (!state.started || state.winnerId) throw new Error('This game is not active.');
+  if (!state.started || state.finished || state.winnerId) throw new Error('This game is not active.');
   if (action.playerId !== state.currentPlayerId) throw new Error('It is not your turn.');
   if (!GLYPHS.includes(action.glyph)) throw new Error('Choose a valid glyph.');
   const next = copy(state), [a, b] = next.players;
-  if (!a.draw.length || !b.draw.length) { next.winnerId = a.draw.length ? a.id : b.id; return next; }
+  if (!a.draw.length || !b.draw.length) { next.finished = true; next.winnerId = a.win.length > b.win.length ? a.id : b.win.length > a.win.length ? b.id : null; return next; }
   const cards = [a.draw.shift(), b.draw.shift()], av = glyphValue(cards[0], action.glyph), bv = glyphValue(cards[1], action.glyph);
   if (av === bv) { a.lose.push(cards[0]); b.lose.push(cards[1]); }
   else { const winner = av > bv ? a : b; if (next.highStakes) winner.win.push(...cards); else { winner.win.push(cards[av > bv ? 0 : 1]); (av > bv ? b : a).lose.push(cards[av > bv ? 1 : 0]); } next.currentPlayerId = winner.id; }
-  if (!a.draw.length || !b.draw.length) next.winnerId = a.win.length > b.win.length ? a.id : b.win.length > a.win.length ? b.id : null;
+  if (!a.draw.length || !b.draw.length) { next.finished = true; next.winnerId = a.win.length > b.win.length ? a.id : b.win.length > a.win.length ? b.id : null; }
   if (!next.winnerId && av === bv) next.currentPlayerId = nextPlayer(next);
   next.nextGlyph = action.glyph;
+  next.lastEvent = { cards, glyph: action.glyph, values: [av, bv], winnerId: av === bv ? null : (av > bv ? a.id : b.id) };
   return next;
 }
 

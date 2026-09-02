@@ -2,6 +2,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { GameRoom } from '../docs/js/game.js';
 
+test('persists AI players and synchronized rules state', () => {
+  const room = new GameRoom('RULES1'); room.join('host', 'Host'); const ai = room.addAI();
+  room.rules = { game: 'war', started: true, currentPlayerId: ai, players: [] };
+  const restored = GameRoom.restore(room.serialize());
+  assert.equal(restored.players.get(ai).ai, true); assert.equal(restored.rules.game, 'war');
+});
+
 const card=()=>({id:crypto.randomUUID(),name:'Secret',face:'https://example.com/f.jpg',back:'https://example.com/b.jpg',sheet:{index:0,width:1,height:1}});
 test('never exposes another player hand',()=>{const room=new GameRoom('TEST');room.join('a','Alice');room.join('b','Bob');room.deck=[card()];room.draw('a');assert.equal(room.viewFor('a').players[0].hand.length,1);assert.equal(room.viewFor('b').players[0].hand,undefined);assert.equal(room.viewFor('b').players[0].handCount,1);});
 test('public observer snapshot exposes hand counts but no private cards',()=>{const room=new GameRoom('TEST');room.join('a','Alice');room.deck=[card()];room.draw('a');const view=room.viewFor(null);assert.equal(view.players[0].handCount,1);assert.equal(view.players[0].hand,undefined);assert.equal(JSON.stringify(view).includes('Secret'),false);});
