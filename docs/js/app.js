@@ -16,6 +16,7 @@ const ui = {
 };
 let role = '', playerId = '', state, room, relay;
 let rulesGame = null;
+let lastRulesQuestion = '';
 let savedRelay;
 let hoveredCard = null, hoveredObject = null, zoomHeld = false;
 let pendingDealCardId = '';
@@ -49,6 +50,7 @@ $('#rules-game').addEventListener('change', updateRulesOptions);
 $('#rules-form').addEventListener('submit', startRulesGame);
 $('#add-ai-player').addEventListener('click', addAIPlayer);
 $('#rules-prompt').addEventListener('submit', submitRulesTurn);
+$('#rules-question-form').addEventListener('submit', submitRulesQuestion);
 $('#end-turn').addEventListener('click', () => action('nextTurn'));
 $('#image-deck-button').addEventListener('click', () => $('#image-deck-dialog').showModal());
 $('#image-deck-form').addEventListener('submit', createUploadedDeck);
@@ -301,6 +303,7 @@ function render() {
   const prompt = $('#rules-prompt');
   if (rulesGame) { const active = rulesGame.players.find((p) => p.id === rulesGame.currentPlayerId), mine = active?.id === playerId, targets = rulesGame.players.filter((p) => p.id !== playerId); prompt.hidden = false; prompt.innerHTML = rulesGame.winnerId ? `<strong>${escapeHtml(rulesGame.players.find((p) => p.id === rulesGame.winnerId)?.name || 'Player')} wins!</strong>` : rulesGame.finished ? '<strong>The game ended in a tie.</strong>' : `<strong>${escapeHtml(active?.name || 'Player')}'s turn</strong><form>${rulesGame.game === 'hundred-miles' ? '<select name="parity"><option>even</option><option>odd</option></select><select name="effect"><option value="advance">Move forward</option><option value="attack">Subtract from player</option></select>' : ''}<select name="glyph">${GLYPHS.map((g) => `<option>${g}</option>`).join('')}</select>${rulesGame.game === 'hundred-miles' ? `<select name="targetId">${targets.map((p) => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join('')}</select>` : ''}<button type="submit" ${mine ? '' : 'disabled'}>${rulesGame.game === 'war' ? 'Play book' : 'Reveal card'}</button></form>${rulesSummary(rulesGame)}`; }
   else prompt.hidden = true;
+  showRulesQuestion();
   ui.players.replaceChildren(...state.players.map((player) => {
     const row = document.createElement('div'); row.className = `player-row${player.id === state.currentTurn ? ' current-turn' : ''}`;
     const backs = Array.from({ length: Math.min(player.handCount, 5) }, () => '<i></i>').join('');
@@ -349,6 +352,16 @@ function startRulesGame(event) {
 }
 
 function submitRulesTurn(event) { event.preventDefault(); const data = Object.fromEntries(new FormData(event.target)); if (data.match) [data.glyph, data.value] = data.match.split(':'); action('rulesTurn', { type: data.type || (rulesGame?.game === 'war' ? 'play' : 'draw'), ...data }); }
+function submitRulesQuestion(event) { event.preventDefault(); const data = Object.fromEntries(new FormData(event.target)); lastRulesQuestion = ''; $('#rules-question-dialog').close(); action('rulesTurn', { type: rulesGame.game === 'war' ? 'play' : 'draw', ...data }); }
+function choices(name, title, values) { return `<fieldset><legend>${escapeHtml(title)}</legend>${values.map(([value, label]) => `<label><input type="radio" name="${name}" value="${escapeHtml(value)}" required><span>${escapeHtml(label)}</span></label>`).join('')}</fieldset>`; }
+function showRulesQuestion() {
+  const dialog = $('#rules-question-dialog'); if (!rulesGame || rulesGame.winnerId || rulesGame.finished) { if (dialog.open) dialog.close(); lastRulesQuestion = ''; return; }
+  const active = rulesGame.players.find((p) => p.id === rulesGame.currentPlayerId); if (active?.id !== playerId || active.ai) { if (dialog.open) dialog.close(); return; }
+  const key = `${rulesGame.game}:${active.id}:${active.draw.length}:${active.discard?.length || 0}:${active.win?.length || 0}`; if (key === lastRulesQuestion) return; lastRulesQuestion = key;
+  const glyphs = GLYPHS.map((g) => [g, `${g[0].toUpperCase()}${g.slice(1)}`]); let html = choices('glyph', 'Choose a glyph', glyphs);
+  if (rulesGame.game === 'hundred-miles') { html += choices('parity', 'Choose even or odd', [['even','Even'],['odd','Odd']]); html += choices('effect', 'If you match, what will you do?', [['advance','Move forward'],['attack','Subtract from another player']]); html += choices('targetId', 'Choose an opponent', rulesGame.players.filter((p) => p.id !== playerId).map((p) => [p.id, p.name])); }
+  $('#rules-questions').innerHTML = html; $('#rules-question-title').textContent = rulesGame.game === 'war' ? 'Choose the glyph for this book' : 'Choose before revealing your card'; $('#rules-answer').textContent = rulesGame.game === 'war' ? 'Play book →' : 'Reveal card →'; dialog.showModal();
+}
 function rulesSummary(game) {
   const scores = `<div>${game.players.map((p) => game.game === 'war' ? `${escapeHtml(p.name)}: ${p.draw.length} draw · ${p.win.length} won` : `${escapeHtml(p.name)}: ${p.miles} miles · ${p.draw.length} cards`).join('<br>')}</div>`;
   if (game.game !== 'hundred-miles' || game.currentPlayerId !== playerId) return scores;
