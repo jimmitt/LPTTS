@@ -47,6 +47,7 @@ $('#standard-deck-button').addEventListener('click', addStandardDeck);
 $('#rules-button').addEventListener('click', openRulesDialog);
 $('#rules-game').addEventListener('change', updateRulesOptions);
 $('#rules-form').addEventListener('submit', startRulesGame);
+$('#add-ai-player').addEventListener('click', addAIPlayer);
 $('#end-turn').addEventListener('click', () => action('nextTurn'));
 $('#image-deck-button').addEventListener('click', () => $('#image-deck-dialog').showModal());
 $('#image-deck-form').addEventListener('submit', createUploadedDeck);
@@ -293,6 +294,9 @@ function render() {
   ui.connections.title = shareLabel; ui.connections.setAttribute('aria-label', shareLabel);
   ui.playerCount.textContent = state.players.length;
   const rulesButton = $('#rules-button'); if (rulesButton) rulesButton.textContent = rulesGame ? `⚙ ${rulesGame.game === 'war' ? 'War' : '100 Miles'} active` : '⚙ Game rules';
+  const prompt = $('#rules-prompt');
+  if (rulesGame) { const active = rulesGame.players.find((p) => p.id === rulesGame.currentPlayerId); prompt.hidden = false; prompt.textContent = rulesGame.winnerId ? `${rulesGame.players.find((p) => p.id === rulesGame.winnerId)?.name || 'Player'} wins!` : `${active?.name || 'Player'}: ${rulesGame.game === 'war' ? `choose a glyph and play the next book` : `choose a glyph and even or odd, then reveal your top card`}.`; }
+  else prompt.hidden = true;
   ui.players.replaceChildren(...state.players.map((player) => {
     const row = document.createElement('div'); row.className = `player-row${player.id === state.currentTurn ? ' current-turn' : ''}`;
     const backs = Array.from({ length: Math.min(player.handCount, 5) }, () => '<i></i>').join('');
@@ -331,6 +335,12 @@ function startRulesGame(event) {
     $('#rules-status').textContent = `${kind === 'war' ? 'War' : '100 Miles'} started. First player: ${state.players.find((p) => p.id === first)?.name || first}.`;
     $('#rules-dialog').close(); render(); toast('Rules engine started');
   } catch (error) { $('#rules-status').textContent = error.message; }
+}
+
+function addAIPlayer() {
+  if (role !== 'host') return toast('Only the host can add an AI player', true);
+  const number = [...room.players.values()].filter((p) => p.ai).length + 1;
+  room.addAI(`AI Player ${number}`); updateHost(); toast(`AI Player ${number} joined`);
 }
 
 function handCard(card) {

@@ -51,6 +51,11 @@ export class GameRoom {
     if (!this.currentTurn) this.currentTurn = id;
   }
 
+  addAI(name = 'AI Player') {
+    const id = `ai-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+    this.join(id, name); this.players.get(id).ai = true; return id;
+  }
+
   leave(id) {
     const order = [...this.players.keys()], leavingTurn = this.currentTurn === id, index = order.indexOf(id);
     this.players.delete(id); this.selections.delete(id); this.selectionScopes.delete(id); this.selectionGroups.delete(id);
@@ -528,7 +533,7 @@ export class GameRoom {
         ? { ...entry, label: 'Private card', private: true }
         : { ...entry, item }),
       players: [...this.players.values()].map((player) => ({
-        id: player.id, name: player.name, color: player.color,
+        id: player.id, name: player.name, color: player.color, ai: Boolean(player.ai),
         handCount: player.hand.length,
         hand: player.id === viewerId ? player.hand : undefined
       }))
