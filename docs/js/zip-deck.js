@@ -11,7 +11,7 @@ export async function importDeckZip(file) {
   const back = images.find((e) => /(^|\/)(back|backs?|card-back)[^/]*\.(png|jpe?g|webp)$/i.test(e.name) && e !== face) || images.find((e) => e !== face);
   const cards = parseTtsDeck(JSON.parse(decoder.decode(await json.data())), { allowLocalArtwork: true });
   const faceUrl = await dataUrl(face), backUrl = await dataUrl(back);
-  return cards.map((card) => ({ ...card, face: faceUrl, back: backUrl }));
+  return { cards: cards.map((card) => ({ ...card, face: faceUrl, back: backUrl })), files: { json: json.name, face: face.name, back: back.name } };
 }
 async function dataUrl(entry) { const type = /\.png$/i.test(entry.name) ? 'image/png' : /\.webp$/i.test(entry.name) ? 'image/webp' : 'image/jpeg'; const bytes = await entry.data(); let binary = ''; for (const byte of bytes) binary += String.fromCharCode(byte); return `data:${type};base64,${btoa(binary)}`; }
 async function readZip(bytes) {

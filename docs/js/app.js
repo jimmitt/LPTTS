@@ -216,18 +216,28 @@ async function importZipDeck() {
   const input = $('#zip-file'), zip = input.files[0];
   try {
     if (!zip) return;
-    toast('Reading deck package…');
-    const cards = await importDeckZip(zip);
+    const dialog = $('#zip-progress-dialog'), status = $('#zip-progress-status'), list = $('#zip-upload-list');
+    list.replaceChildren(); status.textContent = 'Reading package…'; if (!dialog.open) dialog.showModal();
+    const result = await importDeckZip(zip), cards = result.cards;
+    const files = [
+      { key: 'json', name: result.files.json, state: 'Read locally (not uploaded)' },
+      { key: 'face', name: result.files.face, state: 'Waiting…' },
+      { key: 'back', name: result.files.back, state: 'Waiting…' }
+    ];
+    const rows = new Map(files.map((file) => { const row = document.createElement('div'); row.className = 'zip-upload-row'; row.innerHTML = `<span>${escapeHtml(file.name)}</span><small>${escapeHtml(file.state)}</small>`; list.append(row); return [file.key, row]; }));
+    const update = (key, text) => { const small = rows.get(key)?.querySelector('small'); if (small) small.textContent = text; };
+    status.textContent = `Uploading ${files.length - 1} image files…`;
     const uploaded = new Map();
     for (const card of cards) {
       for (const key of ['face', 'back']) if (!uploaded.has(card[key])) {
         const label = key === 'face' ? 'card faces' : 'card back';
-        uploaded.set(card[key], await relay.upload(dataUrlBlob(card[key]), (progress, attempt) => toast(`Uploading ${label}… ${Math.round(progress * 100)}%${attempt > 1 ? ` (retry ${attempt})` : ''}`)).then((result) => result.url));
+        update(key, 'Uploading… 0%');
+        uploaded.set(card[key], await relay.upload(dataUrlBlob(card[key]), (progress, attempt) => update(key, `Uploading… ${Math.round(progress * 100)}%${attempt > 1 ? ` (retry ${attempt})` : ''}`)).then((result) => { update(key, 'Uploaded'); return result.url; }));
       }
       card.face = uploaded.get(card.face); card.back = uploaded.get(card.back);
     }
-    submitImportedDeck(cards);
-  } catch (error) { toast(error.message, true); }
+    submitImportedDeck(cards); status.textContent = `Placed ${cards.length} cards on the table.`; setTimeout(() => dialog.close(), 900);
+  } catch (error) { const status = $('#zip-progress-status'); if (status) status.textContent = `Import failed: ${error.message}`; toast(error.message, true); }
   finally { input.value = ''; }
 }
 
