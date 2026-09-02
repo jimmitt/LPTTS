@@ -220,7 +220,10 @@ async function importZipDeck() {
     const cards = await importDeckZip(zip);
     const uploaded = new Map();
     for (const card of cards) {
-      for (const key of ['face', 'back']) if (!uploaded.has(card[key])) uploaded.set(card[key], await relay.upload(dataUrlBlob(card[key]), key === 'face' ? 'card faces' : 'card back').then((result) => result.url));
+      for (const key of ['face', 'back']) if (!uploaded.has(card[key])) {
+        const label = key === 'face' ? 'card faces' : 'card back';
+        uploaded.set(card[key], await relay.upload(dataUrlBlob(card[key]), (progress, attempt) => toast(`Uploading ${label}… ${Math.round(progress * 100)}%${attempt > 1 ? ` (retry ${attempt})` : ''}`)).then((result) => result.url));
+      }
       card.face = uploaded.get(card.face); card.back = uploaded.get(card.back);
     }
     submitImportedDeck(cards);
